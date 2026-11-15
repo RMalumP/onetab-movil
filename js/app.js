@@ -725,9 +725,6 @@ function renderLogin(error = '') {
     <p>Consulta y ordena desde el móvil las pestañas que guardas con la extensión OneTab Drive. Usa tu propio Dropbox: no hay servidores intermedios.</p>
     <button class="btn primary" data-login style="min-width:240px">Iniciar sesión con Dropbox</button>
     ${error ? `<p class="err" style="margin-top:14px">${esc(error)}</p>` : ''}
-    <div class="panel small"><b>Antes de nada</b>
-      <p class="muted" style="margin:6px 0 0">En la consola de Dropbox, la app de la extensión debe tener esta dirección en «Redirect URIs»:</p>
-      <p><code>${esc(dbx.redirectUri())}</code></p></div>
   </div>`;
   $('[data-login]').addEventListener('click', () => dbx.startLogin().catch(e => renderLogin(e.message)));
 }
