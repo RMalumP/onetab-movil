@@ -20,7 +20,7 @@ Cada cambio se aplica sobre la versión más reciente del archivo y se sube con 
 ## Puesta en marcha
 
 1. **Dropbox** → [consola de apps](https://www.dropbox.com/developers/apps) → la app que ya usa la extensión (misma *App key* que en `config.js`) → pestaña *Settings* → *OAuth 2* → *Redirect URIs*: añade la dirección de GitHub Pages, p. ej. `https://rmalump.github.io/onetab-movil/` (con la barra final). Comprueba que *Allow public clients (Implicit Grant & PKCE)* está en *Allow*.
-2. **GitHub Pages**: *Settings* → *Pages* → *Deploy from a branch* → `main` / `(root)`.
+2. **GitHub Pages**: *Settings* → *Pages* → *Deploy from a branch* → la rama del código / `(root)`.
 3. Abre la dirección en el móvil, inicia sesión en Dropbox, escribe la contraseña de cifrado si la tienes y, en el menú del navegador, **Instalar app** / **Añadir a pantalla de inicio**.
 
 ## Privacidad
