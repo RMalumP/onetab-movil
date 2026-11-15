@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src https://api.dropboxapi.com https://content.dropboxapi.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#0e5c63">
+<meta name="description" content="Gestiona desde el móvil las pestañas que guardas con OneTab Drive (Dropbox).">
+<title>OneTab Móvil</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="app.css">
+<script type="module" src="js/app.js"></script>
+</head>
+<body>
+<div id="app" class="app" aria-live="polite">
+  <p class="boot">Cargando…</p>
+</div>
+<dialog id="sheet" class="sheet"></dialog>
+<div id="toast" class="toast" role="status" hidden></div>
+<noscript><p class="boot">Esta app necesita JavaScript.</p></noscript>
+</body>
+</html>
