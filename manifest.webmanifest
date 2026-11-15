@@ -21,6 +21,7 @@
   },
   "shortcuts": [
     { "name": "Añadir enlace", "url": "./#anadir", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
-    { "name": "Recibidas", "url": "./#recibidas", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+    { "name": "Recibidas", "url": "./#recibidas", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Capturas", "url": "./#capturas", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
   ]
 }

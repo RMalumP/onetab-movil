@@ -13,6 +13,18 @@ PWA para gestionar desde el móvil las pestañas que guardas con la extensión *
 - **Sin conexión**: muestra la última copia y guarda los cambios en cola; se suben al volver la conexión.
 - **Exportar** en formato OneTab (`dirección | título`).
 
+### Novedades de la 1.1
+- **Abrir y quitar**: desliza una pestaña a la izquierda para abrirla y sacarla de la lista (o solo quitarla, según Ajustes).
+- **Deshacer** tras quitar, mover, juntar, dividir, ordenar, mandar a la papelera, limpiar duplicados o importar.
+- **Selección múltiple** (botón ☑): juntar listas, mover pestañas a otra lista o a una nueva, carpeta, destacar, recordar, enviar a otro equipo, abrir, copiar y borrar en bloque.
+- **Recordatorios**: «Recordar…» (1 hora, esta tarde, mañana, el lunes o fecha a elegir), filtro «Con recordatorio» y sección **Para hoy**. El aviso lo sigue dando la extensión.
+- **Capturas**: galería de las capturas que la extensión sincroniza con Dropbox (descifradas si hace falta); verlas, compartirlas, guardarlas o borrarlas.
+- **Duplicados**: lista de pestañas repetidas y limpieza con un toque (búsqueda `is:duplicada`).
+- **Ordenar** una lista por título o por sitio y **dividirla por sitio**.
+- **Copias de seguridad**: ver las copias diarias de la extensión y restaurar una en todos los equipos.
+- **Sitios excluidos**: editar desde el móvil los sitios que la extensión no guarda.
+- **Importar** texto pegado o archivos TXT (OneTab), CSV, JSON o marcadores HTML.
+
 ## Cómo convive con la extensión
 
 Cada cambio se aplica sobre la versión más reciente del archivo y se sube con «solo si sigue en esta revisión»; si otro equipo subió algo entretanto, se vuelve a aplicar sobre lo nuevo. La extensión fusiona después igual que con cualquier otro equipo (por grupo, con lápidas para los borrados). `lib/ops.js`, `lib/util.js` y `lib/pack.js` son copias exactas de la extensión, y `lib/crypto.js` es su parte pura: si cambia el formato en la extensión, hay que copiarlos de nuevo.

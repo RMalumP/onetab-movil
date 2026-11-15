@@ -9,7 +9,8 @@
 //     lo de otro equipo, y la extensión fusiona después como con cualquier otro equipo.
 
 import { normalizeData, addGroup, updateGroup, trashGroup, untrashGroup, deleteGroup, emptyTrash, removeTabs,
-  addFolder, updateFolder, deleteFolder, deleteSession, sessionToGroups, upsertDevice, moveTab } from '../lib/ops.js';
+  addFolder, updateFolder, deleteFolder, deleteSession, sessionToGroups, upsertDevice, moveTab, moveTabs,
+  restoreSnapshots, sortTabs, splitByDomain, dedupeAll, importInto, applyBackup, setExcludedDomains, deleteShot } from '../lib/ops.js';
 import { stableStringify, uid } from '../lib/util.js';
 import { packText, unpack, allDevicesCanUnpack } from '../lib/pack.js';
 import { isEnvelope, deriveKey, decryptEnvelope, encryptText, LockedError } from '../lib/crypto.js';
@@ -44,7 +45,8 @@ const idb = (() => {
   return {
     get: k => tx('readonly', s => s.get(k)).catch(() => undefined),
     set: (k, v) => tx('readwrite', s => s.put(v, k)).catch(() => {}),
-    del: k => tx('readwrite', s => s.delete(k)).catch(() => {})
+    del: k => tx('readwrite', s => s.delete(k)).catch(() => {}),
+    clear: () => tx('readwrite', s => s.clear()).catch(() => {})
   };
 })();
 
@@ -118,7 +120,29 @@ async function encode(data, encrypted, salt) {
 
 /* ───────── Operaciones (lo que se puede cambiar desde el móvil) ───────── */
 
-const GROUP_FIELDS = ['title', 'note', 'starred', 'locked', 'folderId', 'tags', 'targetDevice'];
+const GROUP_FIELDS = ['title', 'note', 'starred', 'locked', 'folderId', 'tags', 'targetDevice', 'remindAt'];
+
+/**
+ * Las operaciones se vuelven a aplicar en cada repintado y al subir: los grupos que crean deben tener
+ * siempre los mismos ids (si no, «Deshacer» o la lista abierta apuntarían a otro). Se renombran los grupos
+ * nuevos a op.seed-0, op.seed-1… y, si renameTabs, también sus pestañas.
+ */
+function stableIds(d, op, fn, renameTabs = false) {
+  const before = new Set(Object.keys(d.groups));
+  const r = fn();
+  let i = 0;
+  for (const id of Object.keys(d.groups)) {
+    if (before.has(id)) continue;
+    const nid = `${op.seed}-${i++}`;
+    const g = d.groups[id];
+    delete d.groups[id];
+    g.id = nid;
+    if (renameTabs) g.tabs.forEach((t, k) => { t.id = `${nid}-t${k}`; });
+    d.groups[nid] = g;
+  }
+  return r;
+}
+const refsOk = (d, refs) => (refs || []).filter(r => d.groups[r.gid] && !d.groups[r.gid].locked);
 
 function applyOp(d, op) {
   const g = op.gid ? d.groups[op.gid] : null;
@@ -127,6 +151,7 @@ function applyOp(d, op) {
       if (d.groups[op.id]) return;
       const ng = addGroup(d, { title: op.title || '', tabs: op.tabs, folderId: op.folderId || null, tags: op.tags || [], note: op.note || '',
         origin: op.origin || null, targetDevice: op.targetDevice || null, createdAt: op.at });
+      if (op.remindAt) ng.remindAt = op.remindAt;
       delete d.groups[ng.id];
       ng.id = op.id;
       ng.tabs.forEach((t, i) => { if (op.tabs[i]?.id) t.id = op.tabs[i].id; });
@@ -157,8 +182,45 @@ function applyOp(d, op) {
     case 'sessionToGroups': {
       const s = d.sessions[op.sid];
       if (!s) return;
-      return sessionToGroups(d, { name: s.name, windows: s.windows, origin: op.origin || s.origin, createdAt: Date.now() });
+      return stableIds(d, op, () => sessionToGroups(d, { name: s.name, windows: s.windows, origin: op.origin || s.origin, createdAt: op.at }), true);
     }
+    case 'restore': {   // Deshacer: vuelve a poner los grupos como estaban y quita los creados
+      for (const id of op.remove || []) deleteGroup(d, id);
+      return restoreSnapshots(d, op.snapshots || []);
+    }
+    case 'sortTabs': return g && sortTabs(d, g.id, op.by);
+    case 'split': return g && stableIds(d, op, () => splitByDomain(d, g.id));
+    case 'dedupe': return dedupeAll(d);
+    case 'trashMany': for (const id of op.gids || []) if (d.groups[id] && !d.groups[id].locked) trashGroup(d, id); return;
+    case 'updateMany': {
+      const patch = Object.fromEntries(Object.entries(op.patch || {}).filter(([k]) => GROUP_FIELDS.includes(k)));
+      for (const id of op.gids || []) if (d.groups[id]) updateGroup(d, id, patch);
+      return;
+    }
+    case 'removeMany': {
+      const by = new Map();
+      for (const r of refsOk(d, op.refs)) { if (!by.has(r.gid)) by.set(r.gid, []); by.get(r.gid).push(r.tid); }
+      for (const [gid, tids] of by) removeTabs(d, gid, tids);
+      return;
+    }
+    case 'moveTabs': {   // a una lista existente (to) o a una nueva (title)
+      const refs = refsOk(d, op.refs);
+      if (!refs.length) return;
+      const to = op.to && d.groups[op.to] ? op.to : null;
+      if (op.to && !to) return;
+      return stableIds(d, op, () => moveTabs(d, refs, to, { title: op.title || '', origin: op.origin || null, folderId: op.folderId || null }));
+    }
+    case 'mergeGroups': {   // junta varias listas en la primera
+      const gids = (op.gids || []).filter(id => d.groups[id] && !d.groups[id].locked);
+      if (gids.length < 2) return;
+      const refs = gids.slice(1).flatMap(id => d.groups[id].tabs.map(t => ({ gid: id, tid: t.id })));
+      moveTabs(d, refs, gids[0]);
+      if (op.title) updateGroup(d, gids[0], { title: op.title });
+      return;
+    }
+    case 'import': return stableIds(d, op, () => importInto(d, { groups: op.groups || [], folders: op.folders || [] }, op.folderId && d.folders[op.folderId] ? op.folderId : null), true);
+    case 'excluded': return setExcludedDomains(d, (op.list || []).map(String));
+    case 'deleteShot': return d.shots[op.id] && deleteShot(d, op.id);
     case 'device': return; // el registro del equipo se hace siempre al sincronizar
   }
 }
@@ -178,7 +240,7 @@ function recompute() {
 
 /** Guarda un cambio: se ve al momento y se sube en cuanto haya conexión. */
 export function enqueue(op) {
-  saveOps([...getOps(), { ...op, at: Date.now() }]);
+  saveOps([...getOps(), { seed: uid(), ...op, at: Date.now() }]);
   recompute();
   emit();
   scheduleSync(400);
@@ -286,7 +348,7 @@ export function forgetKeys() { localStorage.removeItem(KEYS); }
 export async function wipe() {
   await dbx.logout();
   for (const k of [OPS, KEYS]) localStorage.removeItem(k);
-  await idb.del('main');
+  await idb.clear();
   base = null; baseRev = ''; baseRaw = null;
   Object.keys(sessionKeys).forEach(k => delete sessionKeys[k]);
   recompute();
@@ -294,3 +356,65 @@ export async function wipe() {
 }
 
 export const pendingCount = () => getOps().length;
+
+/**
+ * Cambio que no cabe en la cola (restaurar una copia de seguridad): se aplica directamente sobre la versión
+ * más reciente de Dropbox y se sube, con reintento si otro equipo subió algo entretanto. Requiere conexión.
+ */
+export async function commitDirect(fn) {
+  await sync();
+  if (getOps().length) throw new Error('Hay cambios pendientes de subir. Espera a tener conexión.');
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const { text, rev } = await dbx.readMain();
+    let cur = normalizeData(null), enc = false, salt = null;
+    if (text != null) { const r = await decode(text); cur = r.data; enc = r.encrypted; salt = r.salt; }
+    const next = structuredClone(cur);
+    fn(next);
+    registerMe(next);
+    const out = await encode(next, enc, salt);
+    let newRev;
+    try { newRev = await dbx.writeMain(out, rev); }
+    catch (e) { if (e instanceof dbx.ConflictError) continue; throw e; }
+    base = next; baseRev = newRev; baseRaw = out;
+    await idb.set('main', { text: out, rev: newRev, at: Date.now() });
+    recompute();
+    set({ status: 'ok', exists: true, lastSync: Date.now() });
+    return;
+  }
+  throw new Error('Los datos cambiaron varias veces mientras se guardaban. Inténtalo de nuevo.');
+}
+
+/* ───────── Copias de seguridad de la extensión ───────── */
+
+export const listBackups = () => dbx.listBackups();
+
+/** Descarga y descifra una copia: devuelve sus datos. */
+export async function readBackup(id) {
+  return (await decode(await dbx.downloadText(id))).data;
+}
+
+export const restoreBackup = backupData => commitDirect(d => applyBackup(d, backupData));
+
+/* ───────── Capturas (imágenes en Dropbox, cifradas «OTDE1» si el cifrado está activo) ───────── */
+
+const MAGIC = [0x4f, 0x54, 0x44, 0x45, 0x31];
+const b64 = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000)); return btoa(s); };
+const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+
+/** Descarga una imagen de captura y la descifra si hace falta. Devuelve un Blob o lanza LockedError. */
+export async function shotImage(fileId, type) {
+  const cacheKey = 'img:' + fileId;
+  const cached = await idb.get(cacheKey);
+  if (cached) return cached;
+  let u8 = await dbx.downloadBytes(fileId);
+  if (u8.length > 33 && MAGIC.every((b, i) => u8[i] === b)) {
+    const salt = b64(u8.slice(5, 21));
+    const key = keyFor(salt);
+    if (!key) throw new LockedError(salt);
+    const k = await crypto.subtle.importKey('raw', unb64(key), 'AES-GCM', false, ['decrypt']);
+    u8 = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: u8.slice(21, 33) }, k, u8.slice(33)));
+  }
+  const blob = new Blob([u8], { type });
+  if (type === 'image/jpeg') await idb.set(cacheKey, blob); // solo las miniaturas: las completas pueden ocupar mucho
+  return blob;
+}

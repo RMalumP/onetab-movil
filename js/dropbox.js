@@ -157,3 +157,15 @@ export async function writeMain(text, rev) {
   return meta.rev || '';
 }
 
+/** Copias de seguridad que hace la extensión (más recientes primero). */
+export async function listBackups() {
+  let r = await rpc('files/list_folder', { path: '', recursive: false, limit: 2000 });
+  const out = [...r.entries];
+  while (r.has_more) { r = await rpc('files/list_folder/continue', { cursor: r.cursor }); out.push(...r.entries); }
+  return out.filter(e => e['.tag'] === 'file' && e.name.startsWith('onetab-drive-backup-'))
+    .sort((a, b) => b.name.localeCompare(a.name)).map(f => ({ id: f.id, name: f.name, size: f.size || 0, modified: f.server_modified }));
+}
+
+/** Descarga un archivo por id («id:…») o ruta. */
+export async function downloadText(id) { return (await call(`${CONTENT}/files/download`, { arg: { path: id } })).text(); }
+export async function downloadBytes(id) { return new Uint8Array(await (await call(`${CONTENT}/files/download`, { arg: { path: id } })).arrayBuffer()); }
