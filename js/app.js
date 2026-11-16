@@ -11,7 +11,7 @@ import * as XF from './exchange.js';
 import { kindOf, fmtSize, textNoteName, lonelyUrl } from '../lib/xfer.js';
 import { isMobile } from './vimy-gate-check.js';
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.3.1';
 const $ = (s, el = document) => el.querySelector(s);
 const app = $('#app');
 const sheet = $('#sheet');

@@ -1,5 +1,5 @@
 // Service worker: guarda la app para abrirla sin conexión. Los datos (Dropbox) nunca pasan por aquí.
-const VERSION = 'otm-1.3.0';
+const VERSION = 'otm-1.3.1';
 const SHELL = [
   './', 'index.html', 'app.css', 'manifest.webmanifest', 'config.js',
   'js/app.js', 'js/sync.js', 'js/dropbox.js', 'js/exchange.js', 'js/vimy-gate-check.js',
@@ -61,5 +61,17 @@ self.addEventListener('fetch', e => {
     } catch {
       return (await caches.match(isPage ? './' : e.request, { ignoreSearch: isPage })) || Response.error();
     }
+  })());
+});
+
+// Aviso «Vimy ha terminado»: al tocarlo se abre (o se trae al frente) Vimy.
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const target = new URL('vimy.html', self.registration.scope).href;
+  e.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const w = all.find(c => c.url.startsWith(target));
+    if (w) return w.focus();
+    return self.clients.openWindow(target);
   })());
 });
