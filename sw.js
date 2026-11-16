@@ -1,8 +1,9 @@
 // Service worker: guarda la app para abrirla sin conexión. Los datos (Dropbox) nunca pasan por aquí.
-const VERSION = 'otm-1.2.0';
+const VERSION = 'otm-1.3.0';
 const SHELL = [
   './', 'index.html', 'app.css', 'manifest.webmanifest', 'config.js',
-  'js/app.js', 'js/sync.js', 'js/dropbox.js', 'js/exchange.js',
+  'js/app.js', 'js/sync.js', 'js/dropbox.js', 'js/exchange.js', 'js/vimy-gate-check.js',
+  'vimy.html', 'js/vimy-gate.js', 'vimy/gate.css',
   'lib/ops.js', 'lib/util.js', 'lib/pack.js', 'lib/crypto.js', 'lib/formats.js', 'lib/reminders.js', 'lib/xfer.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png'
 ];
@@ -47,7 +48,8 @@ self.addEventListener('fetch', e => {
     return;
   }
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
-  const isPage = e.request.mode === 'navigate';
+  // Las navegaciones a la app se guardan como './'; vimy.html va aparte (si no, sustituiría a la app en la caché).
+  const isPage = e.request.mode === 'navigate' && !url.pathname.endsWith('/vimy.html');
   e.respondWith((async () => {
     try {
       const res = await fetch(e.request);

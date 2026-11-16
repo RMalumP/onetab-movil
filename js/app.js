@@ -9,8 +9,9 @@ import { parseImport, defaultImportTitle } from '../lib/formats.js';
 import { LockedError } from '../lib/crypto.js';
 import * as XF from './exchange.js';
 import { kindOf, fmtSize, textNoteName, lonelyUrl } from '../lib/xfer.js';
+import { isMobile } from './vimy-gate-check.js';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 const $ = (s, el = document) => el.querySelector(s);
 const app = $('#app');
 const sheet = $('#sheet');
@@ -717,6 +718,7 @@ function viewMas() {
     ${row('importar', I.upload, 'Importar')}
     ${row('excluidos', I.block, 'Sitios excluidos', d.shared.excludedDomains?.length ? String(d.shared.excludedDomains.length) : '')}
     ${row('ajustes', I.gear, 'Ajustes')}
+    ${isMobile() ? `<a class="mrow" href="vimy.html">${I.lock}<span>Vimy</span><span class="muted small">con clave</span>${I.chevron}</a>` : ''}
   </nav>`;
 }
 
