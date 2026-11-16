@@ -13,6 +13,9 @@ PWA para gestionar desde el móvil las pestañas que guardas con la extensión *
 - **Sin conexión**: muestra la última copia y guarda los cambios en cola; se suben al volver la conexión.
 - **Exportar** en formato OneTab (`dirección | título`).
 
+### Novedades de la 1.3
+- **Vimy** (Más → Vimy): solo en teléfonos y tabletas y solo con la cuenta de Dropbox autorizada. El código va cifrado en `vimy/vimy.enc` (AES-GCM-256) y la llave está en la carpeta de la app de esa cuenta de Dropbox (`/vimy/llave.json`): sin esa cuenta no se puede leer. La primera vez pide la clave de Vimy una sola vez para dejar la llave en Dropbox. Mientras busca mantiene la pantalla encendida; si sales de la app se pausa (nada sigue en segundo plano) y, tras 1 minuto fuera, vuelve a comprobar la cuenta antes de seguir. Lo que guarda en el móvil va cifrado. Se genera desde el repositorio privado de Vimy (`movil/build.mjs`).
+
 ### Novedades de la 1.2
 - **Archivos**: bandeja compartida con el ordenador (necesita OneTab Drive 4.10, herramienta «Archivos del móvil»). «Enviar al ordenador» sube fotos, vídeos o cualquier archivo con barra de progreso; «Texto» manda un texto o enlace. Lo que llega del ordenador sale marcado como «Nuevo» (con contador en la pestaña); la flecha lo guarda con un toque y al tocar la fila se ve (imágenes, vídeo, audio, texto) con Guardar, Compartir, Copiar y Borrar.
 - **Compartir → OneTab** desde la galería o cualquier app: los archivos se envían directamente a la bandeja. Los enlaces siguen yendo a «Añadir enlaces», y un texto sin enlace abre «Enviar un texto al ordenador».
