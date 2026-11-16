@@ -1,12 +1,16 @@
-// Puerta de Vimy: solo en móviles y solo con la clave.
-// El código de Vimy está en vimy/vimy.enc cifrado (AES-GCM-256 con una clave derivada de la contraseña:
-// PBKDF2-SHA256 + HKDF). En el repositorio no hay ni la contraseña ni el código en claro: sin la clave no se puede leer.
-// Al desbloquear se descifra en memoria y se ejecuta. Lo que Vimy guarda en el móvil (configuración y punto de
-// reanudación) también va cifrado con otra clave derivada de la misma contraseña.
+// Puerta de Vimy: solo en móviles y solo con la cuenta de Dropbox autorizada.
+// El código de Vimy está en vimy/vimy.enc cifrado (AES-GCM-256) con una llave aleatoria que vive en la carpeta de
+// la app de Dropbox de esa cuenta (/vimy/llave.json). Sin esa cuenta no hay llave y el código no se puede leer.
+// La primera vez en la cuenta, la llave se saca de vimy.enc con la clave de Vimy (una sola vez) y se guarda en Dropbox.
+// Lo que Vimy guarda en el móvil (configuración y punto de reanudación) también va cifrado.
 
 import { isMobile } from './vimy-gate-check.js';
+import * as dbx from './dropbox.js';
 
-const LOCK_AFTER_MS = 60 * 1000;        // en segundo plano más de esto → vuelve a pedir la clave
+// SHA-256 de «vimy-movil:» + correo de la cuenta autorizada (el correo no se publica en claro).
+const OWNER = 'b49305f9b25027048f55a09c2c0ab2dde756d91999c4476d8e2ecde9845550a8';
+const KEY_PATH = '/vimy/llave.json';
+const RECHECK_AFTER_MS = 60 * 1000;    // en segundo plano más de esto → se vuelve a comprobar la cuenta
 const MAX_FAILS = 5, BLOCK_MS = 5 * 60 * 1000;
 const enc = new TextEncoder(), dec = new TextDecoder();
 const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
@@ -14,22 +18,42 @@ const b64 = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s +=
 const $ = s => document.querySelector(s);
 const gate = $('#gate'), root = $('#vimy-root');
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const hex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
 
-/* ───── Claves ───── */
-async function deriveKeys(password, kdf) {
-  const pw = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
-  const master = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: unb64(kdf.salt), iterations: kdf.iter }, pw, 256);
-  const hk = await crypto.subtle.importKey('raw', master, 'HKDF', false, ['deriveKey']);
-  const sub = (info, use) => crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: enc.encode(info) },
-    hk, { name: 'AES-GCM', length: 256 }, false, use);
-  return { bundle: await sub('vimy-movil/bundle', ['decrypt']), local: await sub('vimy-movil/local', ['encrypt', 'decrypt']) };
+class Denied extends Error {}
+
+/* ───── Cuenta ───── */
+async function checkAccount() {
+  if (!dbx.isConnected()) throw new Denied('Primero inicia sesión en Dropbox en OneTab Móvil.');
+  const acc = await dbx.currentAccount();
+  const h = hex(await crypto.subtle.digest('SHA-256', enc.encode('vimy-movil:' + String(acc.email || '').trim().toLowerCase())));
+  if (h !== OWNER || acc.email_verified === false) throw new Denied('Esta cuenta de Dropbox no tiene acceso a Vimy.');
 }
-async function openBundle(file, password) {
-  const keys = await deriveKeys(password, file.kdf);
-  let plain;
-  try { plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(file.iv) }, keys.bundle, unb64(file.ct)); }
-  catch { return null; }   // AES-GCM no autentica → clave incorrecta
-  return { keys, bundle: JSON.parse(dec.decode(plain)) };
+
+/* ───── Llaves ───── */
+async function keysFrom(raw) {
+  const bundle = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
+  const hk = await crypto.subtle.importKey('raw', raw, 'HKDF', false, ['deriveKey']);
+  const local = await crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: enc.encode('vimy-movil/local') },
+    hk, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  return { bundle, local };
+}
+async function openWith(file, raw) {
+  const keys = await keysFrom(raw);
+  try { return { keys, bundle: JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(file.iv) }, keys.bundle, unb64(file.ct)))) }; }
+  catch { return null; }
+}
+async function unwrapWithPassword(file, password) {
+  const w = file.wrap;
+  const pw = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+  const k = await crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: unb64(w.kdf.salt), iterations: w.kdf.iter }, pw, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  try { return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(w.iv) }, k, unb64(w.ct))); }
+  catch { return null; }
+}
+async function keyFromDropbox() {
+  const t = await dbx.readTextOrNull(KEY_PATH);
+  if (!t) return null;
+  try { const j = JSON.parse(t); return j.k ? unb64(j.k) : null; } catch { return null; }
 }
 
 /* ───── Almacén local cifrado (IndexedDB) ───── */
@@ -52,7 +76,7 @@ function makeVault(key) {
         if (!box) return null;
         const p = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(box.iv), additionalData: enc.encode(name) }, key, unb64(box.ct));
         return JSON.parse(dec.decode(p));
-      } catch { return null; }   // cifrado con otra clave (se cambió la contraseña): se ignora
+      } catch { return null; }   // cifrado con otra llave: se ignora
     },
     async set(name, value) {
       const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -63,7 +87,7 @@ function makeVault(key) {
   };
 }
 
-/* ───── Intentos fallidos (freno en este dispositivo) ───── */
+/* ───── Intentos fallidos de la clave (solo en la configuración inicial) ───── */
 const fails = {
   get() { try { return JSON.parse(localStorage.getItem('vimyGateFails') || '{"n":0,"until":0}'); } catch { return { n: 0, until: 0 }; } },
   set(v) { try { localStorage.setItem('vimyGateFails', JSON.stringify(v)); } catch {} },
@@ -73,15 +97,19 @@ const fails = {
 };
 
 /* ───── Pantallas ───── */
-function card(inner) { return `<div class="g-card">${inner}</div>`; }
 const lockIcon = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
+const card = inner => `<div class="g-card">${inner}</div>`;
+const back = '<a class="g-link" href="./#mas">← Volver a OneTab</a>';
+function message(container, title, text, retry) {
+  container.innerHTML = card(`<h1>${lockIcon}${esc(title)}</h1><p class="g-muted">${esc(text)}</p>${retry ? '<button class="g-btn" id="g-retry">Reintentar</button>' : ''}${back}`);
+  return retry ? new Promise(r => container.querySelector('#g-retry').addEventListener('click', r, { once: true })) : new Promise(() => {});
+}
 
-function askPassword(container, { title, sub, check }) {
+function askPassword(container, check) {
   return new Promise(resolve => {
-    container.innerHTML = card(`<h1>${lockIcon}${esc(title)}</h1><p class="g-muted">${esc(sub)}</p>
+    container.innerHTML = card(`<h1>${lockIcon}Activar Vimy</h1><p class="g-muted">Primera vez con esta cuenta de Dropbox: escribe la clave de Vimy. Solo se pide esta vez; después entrarás directamente con tu cuenta.</p>
       <form id="g-form" autocomplete="off"><input class="g-field" id="g-pw" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Clave" aria-label="Clave" required>
-      <p class="g-err" id="g-err" role="alert"></p><button class="g-btn" id="g-go">Desbloquear</button></form>
-      <a class="g-link" href="./#mas">← Volver a OneTab</a>`);
+      <p class="g-err" id="g-err" role="alert"></p><button class="g-btn" id="g-go">Activar</button></form>${back}`);
     const form = container.querySelector('#g-form'), pw = container.querySelector('#g-pw'), err = container.querySelector('#g-err'), go = container.querySelector('#g-go');
     let timer = 0;
     const tick = () => {
@@ -98,9 +126,9 @@ function askPassword(container, { title, sub, check }) {
       if (fails.wait() > 0 || !pw.value) return;
       go.disabled = true; err.textContent = ''; go.textContent = 'Comprobando…';
       let r = null;
-      try { r = await check(pw.value); } catch (x) { err.textContent = 'No se pudo abrir: ' + (x?.message || x); }
+      try { r = await check(pw.value); } catch (x) { err.textContent = 'No se pudo activar: ' + (x?.message || x); }
       pw.value = '';
-      go.textContent = 'Desbloquear';
+      go.textContent = 'Activar';
       if (r) { fails.ok(); clearTimeout(timer); return resolve(r); }
       if (!err.textContent) fails.bad();
       go.disabled = false; tick(); pw.focus();
@@ -108,11 +136,37 @@ function askPassword(container, { title, sub, check }) {
   });
 }
 
-/* ───── Bloqueo (tras desbloquear) ───── */
-let locked = false, hiddenAt = 0, file = null;
+/** Comprueba la cuenta y consigue la llave; repite hasta que funcione (con «Reintentar» si falla la red). */
+async function unlock(container, file, { allowSetup }) {
+  for (;;) {
+    container.innerHTML = card('<p class="g-muted">Comprobando tu cuenta de Dropbox…</p>');
+    try {
+      await checkAccount();
+      if (!file) return null;   // solo comprobar la cuenta
+      const raw = await keyFromDropbox();
+      const opened = raw && await openWith(file, raw);
+      if (opened) return opened;
+      if (!allowSetup) throw new Denied('La llave de Vimy en Dropbox ya no sirve. Abre Vimy de nuevo.');
+      return await askPassword(container, async pw => {
+        const k = await unwrapWithPassword(file, pw);
+        if (!k) return null;
+        const o = await openWith(file, k);
+        if (!o) return null;
+        await dbx.writeText(KEY_PATH, JSON.stringify({ v: 1, k: b64(k), creada: new Date().toISOString() }));
+        return o;
+      });
+    } catch (e) {
+      if (e instanceof Denied || e instanceof dbx.NotConnectedError) return message(container, 'Sin acceso', e.message);
+      await message(container, 'No se pudo comprobar', (navigator.onLine ? '' : 'Sin conexión. ') + 'No se pudo hablar con Dropbox (' + (e?.message || e) + ').', true);
+    }
+  }
+}
+
+/* ───── Al volver de segundo plano ───── */
+let locked = false, hiddenAt = 0;
 const unlockedQ = [], lockCbs = [];
 function whenUnlocked(cb) { if (!locked) cb(); else unlockedQ.push(cb); }
-async function lock() {
+async function recheck() {
   if (locked) return;
   locked = true;
   lockCbs.forEach(cb => { try { cb(); } catch {} });
@@ -121,34 +175,31 @@ async function lock() {
   ov.innerHTML = '<div class="gate"></div>';
   document.body.appendChild(ov);
   root.setAttribute('aria-hidden', 'true'); root.inert = true;
-  await askPassword(ov.firstChild, { title: 'Vimy bloqueada', sub: 'La búsqueda está en pausa. Escribe la clave para seguir.', check: pw => openBundle(file, pw) });
+  await unlock(ov.firstChild, null, { allowSetup: false });
   ov.remove(); root.removeAttribute('aria-hidden'); root.inert = false;
   locked = false;
   unlockedQ.splice(0).forEach(cb => { try { cb(); } catch {} });
 }
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { hiddenAt = Date.now(); return; }
-  if (window.__vimyMovil && hiddenAt && Date.now() - hiddenAt > LOCK_AFTER_MS) lock();
+  if (window.__vimyMovil && hiddenAt && Date.now() - hiddenAt > RECHECK_AFTER_MS) recheck();
   hiddenAt = 0;
 });
 
 /* ───── Arranque ───── */
 (async function start() {
-  if (!isMobile()) {
-    gate.innerHTML = card(`<h1>${lockIcon}Solo en el móvil</h1><p class="g-muted">Esta sección solo está disponible en OneTab Móvil desde un teléfono o tableta.</p><a class="g-link" href="./">← Volver a OneTab</a>`);
-    return;
-  }
-  if (!crypto?.subtle) { gate.innerHTML = card('<h1>No disponible</h1><p class="g-muted">Abre la app desde su dirección https.</p>'); return; }
+  if (!isMobile()) return message(gate, 'Solo en el móvil', 'Esta sección solo está disponible en OneTab Móvil desde un teléfono o tableta.');
+  if (!crypto?.subtle) return message(gate, 'No disponible', 'Abre la app desde su dirección https.');
+  let file;
   try {
     const r = await fetch('vimy/vimy.enc', { cache: 'no-cache' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     file = await r.json();
-    if (file.fmt !== 'vimy-movil-v1') throw new Error('formato desconocido');
+    if (file.fmt !== 'vimy-movil-v2') throw new Error('formato desconocido');
   } catch (e) {
-    gate.innerHTML = card(`<h1>No disponible</h1><p class="g-muted">No se pudo cargar (${esc(e.message || e)}). Comprueba la conexión.</p><a class="g-link" href="./">← Volver a OneTab</a>`);
-    return;
+    return message(gate, 'No disponible', `No se pudo cargar (${e.message || e}). Comprueba la conexión.`);
   }
-  const { keys, bundle } = await askPassword(gate, { title: 'Vimy', sub: 'Sección protegida. Escribe la clave de acceso.', check: pw => openBundle(file, pw) });
+  const { keys, bundle } = await unlock(gate, file, { allowSetup: true });
   gate.innerHTML = card('<p class="g-muted">Abriendo…</p>');
 
   // Lo que Vimy guarda: localStorage → memoria + IndexedDB cifrada; punto de reanudación cifrado.
@@ -172,13 +223,12 @@ document.addEventListener('visibilitychange', () => {
 
   const bar = document.createElement('div');
   bar.className = 'vbar';
-  bar.innerHTML = '<a href="./#mas">← OneTab</a><span>Vimy ' + esc(bundle.version || '') + '</span><button type="button" id="v-lock">Bloquear</button>';
+  bar.innerHTML = '<a href="./#mas">← OneTab</a><span>Vimy ' + esc(bundle.version || '') + '</span>';
   const style = document.createElement('style');
   style.textContent = bundle.css;
   document.head.appendChild(style);
   root.innerHTML = bundle.html;
   root.prepend(bar);
-  bar.querySelector('#v-lock').addEventListener('click', lock);
   gate.hidden = true; gate.innerHTML = '';
   root.hidden = false;
   document.title = 'Vimy';
