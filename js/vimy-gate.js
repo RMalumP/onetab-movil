@@ -215,7 +215,7 @@ document.addEventListener('visibilitychange', () => {
       removeItem: k => { mem.delete(k); persist(); }
     },
     saveCp: cp => (cpBusy = cpBusy.then(() => vault.set('checkpoint', cp)).catch(() => {})),
-    loadCp: () => vault.get('checkpoint'),
+    loadCp: () => cpBusy.then(() => vault.get('checkpoint')),
     clearCp: () => (cpBusy = cpBusy.then(() => vault.del('checkpoint')).catch(() => {})),
     whenUnlocked,
     onLock: cb => lockCbs.push(cb)
