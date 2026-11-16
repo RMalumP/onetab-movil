@@ -1,7 +1,7 @@
 {
   "name": "OneTab Móvil",
   "short_name": "OneTab",
-  "description": "Gestiona desde el móvil las pestañas que guardas con OneTab Drive (Dropbox).",
+  "description": "Gestiona desde el móvil las pestañas que guardas con OneTab Drive y pasa archivos al ordenador (Dropbox).",
   "lang": "es",
   "id": "./",
   "start_url": "./",
@@ -15,13 +15,15 @@
     { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "share_target": {
-    "action": "./",
-    "method": "GET",
-    "params": { "title": "share_title", "text": "share_text", "url": "share_url" }
+    "action": "./compartir",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": { "title": "share_title", "text": "share_text", "url": "share_url", "files": [{ "name": "files", "accept": ["*/*"] }] }
   },
   "shortcuts": [
     { "name": "Añadir enlace", "url": "./#anadir", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
     { "name": "Recibidas", "url": "./#recibidas", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Archivos", "url": "./#archivos", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
     { "name": "Capturas", "url": "./#capturas", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
   ]
 }

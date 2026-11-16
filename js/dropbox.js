@@ -169,3 +169,91 @@ export async function listBackups() {
 /** Descarga un archivo por id («id:…») o ruta. */
 export async function downloadText(id) { return (await call(`${CONTENT}/files/download`, { arg: { path: id } })).text(); }
 export async function downloadBytes(id) { return new Uint8Array(await (await call(`${CONTENT}/files/download`, { arg: { path: id } })).arrayBuffer()); }
+
+/* ───────── Archivos sueltos (pestaña «Archivos»: intercambio con el ordenador) ───────── */
+
+const OCTET = { 'Content-Type': 'application/octet-stream' };
+const XFER_CHUNK = 8 * 1024 * 1024;
+const THUMB_EXT = /\.(jpe?g|png|gif|webp|bmp|tiff?|heic)$/i;
+const isConflict = e => e instanceof DbxError && /conflict/.test(e.summary || '');
+
+/** Lista una carpeta (la crea si no existe). Devuelve { entries, cursor }. */
+export async function listFolder(path) {
+  let r;
+  try { r = await rpc('files/list_folder', { path, recursive: false, limit: 2000 }); }
+  catch (e) {
+    if (!isNotFound(e)) throw e;
+    try { await rpc('files/create_folder_v2', { path, autorename: false }); } catch (e2) { if (!isConflict(e2)) throw e2; }
+    r = await rpc('files/list_folder', { path, recursive: false, limit: 2000 });
+  }
+  const out = [...r.entries];
+  while (r.has_more) { r = await rpc('files/list_folder/continue', { cursor: r.cursor }); out.push(...r.entries); }
+  return { entries: out.filter(e => e['.tag'] === 'file'), cursor: r.cursor };
+}
+
+/** Espera cambios en la carpeta (sin token; «cors-hack» evita la consulta previa del navegador). */
+export async function longpoll(cursor, timeout, signal) {
+  const res = await fetch('https://notify.dropboxapi.com/2/files/list_folder/longpoll', {
+    method: 'POST', signal, headers: { 'Content-Type': 'text/plain; charset=dropbox-cors-hack' }, body: JSON.stringify({ cursor, timeout })
+  });
+  if (!res.ok) throw new DbxError(res.status, '', `Dropbox respondió ${res.status}`);
+  return res.json();
+}
+
+/** Sube sin pisar (Dropbox añade « (1)» si el nombre existe). onProgress(bytes). */
+export async function putFile(path, blob, onProgress = () => {}) {
+  const commit = { path, mode: { '.tag': 'add' }, autorename: true, mute: true };
+  if (blob.size <= XFER_CHUNK) {
+    const meta = await (await call(`${CONTENT}/files/upload`, { headers: OCTET, body: blob, arg: commit })).json();
+    onProgress(blob.size);
+    return meta;
+  }
+  const { session_id: id } = await (await call(`${CONTENT}/files/upload_session/start`, { headers: OCTET, body: blob.slice(0, XFER_CHUNK), arg: { close: false } })).json();
+  let offset = XFER_CHUNK;
+  onProgress(offset);
+  while (blob.size - offset > XFER_CHUNK) {
+    await call(`${CONTENT}/files/upload_session/append_v2`, { headers: OCTET, body: blob.slice(offset, offset + XFER_CHUNK), arg: { cursor: { session_id: id, offset }, close: false } });
+    offset += XFER_CHUNK;
+    onProgress(offset);
+  }
+  const meta = await (await call(`${CONTENT}/files/upload_session/finish`, { headers: OCTET, body: blob.slice(offset), arg: { cursor: { session_id: id, offset }, commit } })).json();
+  onProgress(blob.size);
+  return meta;
+}
+
+/** Descarga por id o ruta con progreso. */
+export async function getFile(idOrPath, onProgress = () => {}) {
+  const res = await call(`${CONTENT}/files/download`, { arg: { path: idOrPath } });
+  if (!res.body?.getReader) return new Uint8Array(await res.arrayBuffer());
+  const reader = res.body.getReader();
+  const parts = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value); got += value.length; onProgress(got);
+  }
+  const out = new Uint8Array(got);
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
+}
+
+export async function removeFile(idOrPath) {
+  try { await rpc('files/delete_v2', { path: idOrPath }); } catch (e) { if (!isNotFound(e)) throw e; }
+}
+
+/** Miniaturas JPEG (data: URL) de las imágenes que lo admiten. Las cifradas fallan y se omiten. */
+export async function thumbs(entries) {
+  const want = entries.filter(e => THUMB_EXT.test(e.name) && e.size < 30 * 1024 * 1024);
+  const out = new Map();
+  for (let i = 0; i < want.length; i += 25) {
+    const batch = want.slice(i, i + 25);
+    const r = await call(`${CONTENT}/files/get_thumbnail_batch`, {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries: batch.map(e => ({ path: e.id, format: 'jpeg', size: 'w256h256', mode: 'fitone_bestfit' })) })
+    }).then(res => res.json()).catch(() => null);
+    (r?.entries || []).forEach((x, k) => { if (x['.tag'] === 'success' && x.thumbnail) out.set(batch[k].id, 'data:image/jpeg;base64,' + x.thumbnail); });
+  }
+  return out;
+}

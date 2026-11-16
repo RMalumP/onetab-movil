@@ -7,8 +7,10 @@ import { escapeHtml as esc, domainOf, normalizeText, relativeTime, plural, forma
 import { presetTime, remindLabel } from '../lib/reminders.js';
 import { parseImport, defaultImportTitle } from '../lib/formats.js';
 import { LockedError } from '../lib/crypto.js';
+import * as XF from './exchange.js';
+import { kindOf, fmtSize, textNoteName, lonelyUrl } from '../lib/xfer.js';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const $ = (s, el = document) => el.querySelector(s);
 const app = $('#app');
 const sheet = $('#sheet');
@@ -52,7 +54,13 @@ const I = {
   upload: svg('<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>'),
   block: svg('<circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/>'),
   chevron: svg('<path d="M9 6l6 6-6 6"/>'),
-  download: svg('<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>')
+  download: svg('<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>'),
+  files: svg('<path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M12 11v6M9.5 13.5L12 11l2.5 2.5"/>'),
+  image: svg('<rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M4 17l5-5 4 4 3-3 4 4"/>'),
+  video: svg('<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/>'),
+  audio: svg('<path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>'),
+  doc: svg('<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 12h7M9 16h7"/>'),
+  file: svg('<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/>')
 };
 
 /* ───────── Preferencias de esta app ───────── */
@@ -546,6 +554,148 @@ async function shotViewer(s) {
   });
 }
 
+/* ── Archivos: bandeja compartida con el ordenador ── */
+const XKIND = { image: 'image', video: 'video', audio: 'audio', text: 'doc', pdf: 'doc', other: 'file' };
+const xEntry = id => XF.X.entries.find(e => e.id === id);
+
+function xRow(e) {
+  const X = XF.X;
+  const k = kindOf(e.name);
+  const thumb = X.thumbs.get(e.id);
+  const text = X.texts.get(e.id);
+  const busy = X.busy.get(e.id);
+  const fresh = X.fresh.has(e.id);
+  return `<div class="xf-row${fresh ? ' fresh' : ''}">
+    <button class="xf-open" data-xfopen="${esc(e.id)}">
+      <span class="xf-ic">${thumb ? `<img alt="" src="${thumb}">` : I[XKIND[k]]}</span>
+      <span class="xf-main"><span class="xf-name">${esc(e.name)}</span>
+        <span class="xf-meta">${esc(fmtSize(e.size))} · ${relativeTime(Date.parse(e.server_modified))}${fresh ? ' <span class="xf-new">Nuevo</span>' : ''}</span>
+        ${text != null ? `<span class="xf-snip">${esc(text.slice(0, 200))}</span>` : ''}
+        <span class="xf-bar" data-xfbar="${esc(e.id)}" ${busy == null ? 'hidden' : ''}><i style="width:${Math.round((busy || 0) * 100)}%"></i></span></span>
+    </button>
+    <button class="icon-btn xf-get" data-xfget="${esc(e.id)}" aria-label="Guardar ${esc(e.name)}">${I.download}</button>
+  </div>`;
+}
+
+function viewArchivos() {
+  const X = XF.X;
+  const ups = X.uploads.map((u, i) => `<li class="${u.error ? 'err' : ''}">
+    <span class="xf-name">${esc(u.name)}</span>
+    <span class="xf-meta">${u.error ? esc(u.error) : u.done ? 'Enviado ✓' : u.started ? `${Math.round(u.sent / (u.size || 1) * 100)} %` : 'Esperando…'}</span>
+    ${u.error ? `<span class="row">${u.file ? `<button class="btn" data-xfretry="${i}">Reintentar</button>` : ''}${u.code === 'too-big-encrypted' && u.file ? `<button class="btn" data-xfplain="${i}">Enviar sin cifrar</button>` : ''}<button class="btn" data-xfdismiss="${i}">Quitar</button></span>`
+      : u.done ? '' : `<span class="xf-bar"><i style="width:${Math.round(u.sent / (u.size || 1) * 100)}%"></i></span>`}</li>`).join('');
+  const list = X.entries.length ? `<div class="xf-list">${X.entries.map(xRow).join('')}</div>`
+    : X.loading || !X.loaded ? (X.error ? '' : '<p class="boot">Cargando la bandeja…</p>')
+    : `<div class="empty"><h2>La bandeja está vacía</h2><p>Lo que sueltes en <b>Archivos del móvil</b> de la extensión aparecerá aquí${X.live ? ' al momento' : ''}.</p></div>`;
+  return `<div class="xf-send">
+      <label class="btn primary xf-pick">${I.upload}<span>Enviar al ordenador</span><input type="file" id="xf-file" multiple hidden></label>
+      <button class="btn" data-xftext>${I.note}<span>Texto</span></button>
+    </div>
+    ${ups ? `<ul class="xf-up">${ups}</ul>` : ''}
+    <div class="xf-head"><span class="count">${X.entries.length ? plural(X.entries.length, 'archivo', 'archivos') : ''}</span>
+      ${X.live ? '<span class="xf-live">En directo</span>' : ''}
+      <button class="icon-btn" data-xfrefresh aria-label="Actualizar">${I.sync}</button></div>
+    ${X.error ? `<p class="err">${esc(X.error)}</p>` : ''}
+    ${list}
+    <p class="muted small xf-foot">Truco: desde la galería o cualquier app, <b>Compartir → OneTab</b> lo envía directamente. Los archivos están en tu Dropbox (Aplicaciones › … › Intercambio)${S.state.encrypted ? ' y se suben cifrados con tu contraseña' : ''}.</p>`;
+}
+
+function saveBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+}
+
+function setBusy(id, v) {
+  if (v == null) XF.X.busy.delete(id); else XF.X.busy.set(id, v);
+  const bar = document.querySelector(`[data-xfbar="${CSS.escape(id)}"]`);
+  if (bar) { bar.hidden = v == null; bar.firstElementChild.style.width = Math.round((v || 0) * 100) + '%'; }
+}
+
+/** Descarga con progreso en la fila. Devuelve el Blob o null si falla (ya avisado). */
+async function xFetch(e) {
+  setBusy(e.id, 0);
+  try {
+    const blob = await XF.fetchFile(e, n => setBusy(e.id, e.size ? n / e.size : 0));
+    XF.markSeen([e.id]);
+    return blob;
+  } catch (err) {
+    toast(err instanceof LockedError ? 'Falta la contraseña de cifrado.' : 'No se pudo descargar: ' + (err.message || err), 4000);
+    return null;
+  } finally { setBusy(e.id, null); }
+}
+
+async function xSave(e) {
+  const blob = await xFetch(e);
+  if (blob) { saveBlob(blob, e.name); toast('Guardado en Descargas'); }
+}
+
+function xTextForm(prefill = '') {
+  form('Enviar un texto al ordenador', [{ name: 'text', label: 'Texto o enlace', type: 'textarea', value: prefill, placeholder: 'Escribe o pega aquí…' }], 'Enviar', v => {
+    const t = v.text.trim();
+    if (!t) throw new Error('Escribe algo primero.');
+    XF.enqueue([new File([t], textNoteName(), { type: 'text/plain' })], t);
+    if (ui.view !== 'archivos') location.hash = 'archivos';
+  }, 'Aparecerá en «Archivos del móvil» de la extensión, con un botón para copiarlo.');
+}
+
+function xSheet(e) {
+  const k = kindOf(e.name);
+  const thumb = XF.X.thumbs.get(e.id);
+  openSheet(`<h3>${esc(e.name)}</h3><p class="sub">${esc(fmtSize(e.size))} · ${esc(formatDate(Date.parse(e.server_modified)))}</p>
+    <div class="row xf-acts">
+      <button class="btn primary" data-xs="save">${I.download} Guardar</button>
+      <button class="btn" data-xs="share">${I.share} Compartir</button>
+      ${k === 'text' ? `<button class="btn" data-xs="copy">${I.copy} Copiar</button>` : ''}
+      <span data-xs-link></span>
+      <button class="btn danger" data-xs="del">${I.trash} Borrar</button>
+    </div>
+    <div class="viewer" data-viewer>${thumb ? `<img alt="" src="${thumb}">` : ''}${['image', 'text', 'video', 'audio'].includes(k) && e.size < 60 * 1024 * 1024 ? '<p class="muted">Cargando…</p>' : ''}</div>`, async el => {
+    const box = $('[data-viewer]', el);
+    let blob = null;
+    const get = async () => blob ??= await xFetch(e);
+    if (['image', 'text', 'video', 'audio'].includes(k) && e.size < 60 * 1024 * 1024) {
+      const b = await get();
+      if (b && sheet.open) {
+        if (k === 'text') {
+          const t = await b.text();
+          XF.X.texts.set(e.id, t);
+          box.innerHTML = `<pre class="xf-pre">${esc(t)}</pre>`;
+          const u = safeHref(lonelyUrl(t));
+          if (u) $('[data-xs-link]', el).outerHTML = `<a class="btn" href="${esc(u)}" target="_blank" rel="noopener noreferrer">${I.open} Abrir enlace</a>`;
+        } else {
+          const media = document.createElement(k === 'image' ? 'img' : k);
+          media.src = URL.createObjectURL(b);
+          if (k !== 'image') { media.controls = true; media.playsInline = true; }
+          media.alt = '';
+          box.replaceChildren(media);
+        }
+      } else if (!b) box.innerHTML = '';
+    }
+    el.querySelectorAll('[data-xs]').forEach(btn => btn.addEventListener('click', async () => {
+      const act = btn.dataset.xs;
+      if (act === 'del') {
+        if (!confirm(`¿Borrar «${e.name}» de la bandeja? Desaparece también del ordenador.`)) return;
+        closeSheet();
+        try { await XF.remove(e); toast('Borrado'); } catch (err) { toast('No se pudo borrar: ' + (err.message || err)); }
+        return;
+      }
+      const b = await get();
+      if (!b) return;
+      if (act === 'save') { saveBlob(b, e.name); toast('Guardado en Descargas'); }
+      if (act === 'copy') copy(await b.text(), 'Texto copiado');
+      if (act === 'share') {
+        const f = new File([b], e.name, { type: b.type });
+        if (navigator.canShare?.({ files: [f] })) { try { await navigator.share({ files: [f], title: e.name }); } catch { /* cancelado */ } }
+        else if (k === 'text') share({ title: e.name, text: await b.text() });
+        else toast('Este navegador no puede compartir archivos. Usa «Guardar».');
+      }
+    }));
+  });
+}
+
 /* ── Más: papelera, duplicados, copias, importar, excluidos ── */
 function dupInfo() {
   const d = S.state.data;
@@ -756,13 +906,14 @@ function renderLocked() {
 async function logout() {
   if (S.pendingCount() && !confirm(`Hay ${plural(S.pendingCount(), 'cambio', 'cambios')} sin subir que se perderán. ¿Cerrar sesión?`)) return;
   await S.wipe();
+  XF.reset();
   thumbUrls.clear();
   render();
 }
 
 /* ───────── Render principal ───────── */
 
-const TITLES = { listas: 'Listas', recibidas: 'Recibidas', sesiones: 'Sesiones', capturas: 'Capturas', mas: 'Más',
+const TITLES = { listas: 'Listas', recibidas: 'Recibidas', sesiones: 'Sesiones', capturas: 'Capturas', archivos: 'Archivos', mas: 'Más',
   papelera: 'Papelera', duplicados: 'Duplicados', copias: 'Copias de seguridad', importar: 'Importar', excluidos: 'Sitios excluidos', ajustes: 'Ajustes' };
 const SUB = new Set(['papelera', 'duplicados', 'copias', 'importar', 'excluidos', 'ajustes']);
 
@@ -796,7 +947,7 @@ function render() {
       <select class="field" id="f-device" aria-label="Equipo">${[['all', 'Todos los equipos'], ...Object.values(d.devices).map(x => [x.id, x.name])].map(([id, l]) => `<option value="${esc(id)}" ${prefs.get('device') === id ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
       <select class="field" id="f-sort" aria-label="Orden">${[['new', 'Más recientes'], ['old', 'Más antiguas'], ['name', 'Por nombre'], ['size', 'Más pestañas']].map(([id, l]) => `<option value="${id}" ${prefs.get('sort') === id ? 'selected' : ''}>${l}</option>`).join('')}</select>
     </div>` : '';
-  const views = { listas: viewListas, recibidas: viewRecibidas, sesiones: viewSesiones, capturas: viewCapturas, mas: viewMas,
+  const views = { listas: viewListas, recibidas: viewRecibidas, sesiones: viewSesiones, capturas: viewCapturas, archivos: viewArchivos, mas: viewMas,
     papelera: viewPapelera, duplicados: viewDuplicados, copias: viewCopias, importar: viewImportar, excluidos: viewExcluidos, ajustes: viewAjustes };
   const body = views[v]();
   const navItem = (id, icon, label, badge = 0) => `<a href="#${id}" ${v === id || (id === 'mas' && SUB.has(v)) ? 'aria-current="page"' : ''}>${icon}<span>${label}</span>${badge ? `<span class="badge">${badge}</span>` : ''}</a>`;
@@ -806,7 +957,7 @@ function render() {
     ? `<div class="selbar"><button class="btn" data-sel-cancel>Cancelar</button><span class="selcount">${plural(selCount(), 'seleccionado', 'seleccionados')}</span>
         <button class="btn" data-sel-all>Todo</button><button class="btn primary" data-sel-menu ${selCount() ? '' : 'disabled'}>Acciones</button></div>`
     : `<nav class="nav" aria-label="Secciones"><div class="nav-in">
-      ${navItem('listas', I.list, 'Listas')}${navItem('recibidas', I.inbox, 'Recibidas', inboxN)}${navItem('sesiones', I.session, 'Sesiones')}${navItem('capturas', I.camera, 'Capturas')}${navItem('mas', I.menu, 'Más')}
+      ${navItem('listas', I.list, 'Listas')}${navItem('recibidas', I.inbox, 'Recibidas', inboxN)}${navItem('sesiones', I.session, 'Sesiones')}${navItem('capturas', I.camera, 'Capturas')}${navItem('archivos', I.files, 'Archivos', XF.freshCount())}${navItem('mas', I.menu, 'Más')}
     </div></nav>`;
   app.innerHTML = `<header class="top"><div class="top-row">${SUB.has(v) ? `<a class="icon-btn back" href="#mas" aria-label="Volver">${I.undo}</a>` : ''}<h1>${TITLES[v]}</h1>
       ${selectable && !ui.sel ? `<button class="icon-btn" data-sel-start aria-label="Seleccionar varias">${I.check}</button>` : ''}${statusPill()}</div>${filters}</header>
@@ -829,6 +980,13 @@ app.addEventListener('click', e => {
   if (!t) return;
   const ds = t.dataset;
   if ('sync' in ds) return S.sync();
+  if ('xftext' in ds) return xTextForm();
+  if ('xfrefresh' in ds) return XF.refresh();
+  if (ds.xfopen) { const e = xEntry(ds.xfopen); return e && xSheet(e); }
+  if (ds.xfget) { const e = xEntry(ds.xfget); return e && xSave(e); }
+  if (ds.xfretry) return XF.retry(+ds.xfretry);
+  if (ds.xfplain) return XF.retry(+ds.xfplain, true);
+  if (ds.xfdismiss) return XF.dismiss(+ds.xfdismiss);
   if ('add' in ds) return addForm();
   if ('more' in ds) { ui.limit += 60; return render(); }
   if ('selStart' in ds) { ui.sel = { g: new Set(), t: new Set() }; return render(); }
@@ -903,6 +1061,7 @@ app.addEventListener('change', async e => {
   if (id === 'f-sort') { prefs.set('sort', e.target.value); render(); }
   if (id === 'theme') { prefs.set('theme', e.target.value); applyTheme(); }
   if (id === 'swipe') { prefs.set('swipe', e.target.value); toast('Guardado'); }
+  if (id === 'xf-file') { const files = [...e.target.files]; e.target.value = ''; if (files.length) XF.enqueue(files); }
   if (id === 'imp-file') {
     const file = e.target.files[0];
     if (!file) return;
@@ -957,16 +1116,24 @@ function route() {
   ui.view = next;
   render();
   window.scrollTo(0, 0);
+  liveFiles();
+}
+
+/** La bandeja escucha cambios solo con la pestaña Archivos abierta y la app a la vista. */
+function liveFiles() {
+  if (ui.view === 'archivos' && document.visibilityState === 'visible' && dbx.isConnected()) { if (XF.X.loaded) XF.refresh(); XF.startLive(); }
+  else XF.stopLive();
 }
 window.addEventListener('hashchange', route);
 
 // Repintar al cambiar los datos, sin perder el desplazamiento.
 let raf = 0;
 S.subscribe(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { if (!sheet.open || S.state.status === 'locked') render(); }); });
+XF.subscribe(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { if (!sheet.open) render(); }); });
 sheet.addEventListener('close', () => render());
 
 window.addEventListener('online', () => S.scheduleSync(300));
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') S.scheduleSync(200); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') S.scheduleSync(200); liveFiles(); });
 setInterval(() => { if (document.visibilityState === 'visible') S.scheduleSync(); }, 60000);
 
 /* ───────── Arranque ───────── */
@@ -983,10 +1150,24 @@ function takeShare() {
   return { links: [...new Set(links)].map(u => `${u} | ${title || u}`).join('\n'), title: '' };
 }
 
+/** Lo compartido con la versión 1.2 (POST con archivos, lo guarda el service worker). */
+async function takeSharedFiles() {
+  // Se mira siempre (no solo con ?compartido): si había que iniciar sesión antes, sigue esperando unos minutos.
+  if (new URLSearchParams(location.search).has('compartido')) history.replaceState(null, '', dbx.redirectUri());
+  const p = await S.takeShared();
+  if (!p) return null;
+  const files = (p.files || []).filter(f => f && (f.size || f.name));
+  if (files.length) return { files };
+  const links = parseLinks([p.url, p.text].join('\n')).map(l => l.url);
+  if (links.length) return { links: [...new Set(links)].map(u => `${u} | ${p.title || u}`).join('\n'), title: '' };
+  const text = [p.title, p.text].filter(Boolean).join('\n').trim();
+  return text ? { text } : null;
+}
+
 (async function start() {
   applyTheme();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-  const shared = takeShare();
+  const linkShare = takeShare();
   try {
     if (await dbx.finishLogin()) toast('Sesión iniciada');
   } catch (e) { return renderLogin(e.message); }
@@ -994,5 +1175,12 @@ function takeShare() {
   await S.loadCache();
   route();
   S.sync();
-  if (shared) { ui.view = 'listas'; render(); addForm(shared); }
+  if (ui.view !== 'archivos') XF.refresh(); // una sola consulta, para el contador de «Archivos» (sin quedarse escuchando)
+  const shared = linkShare || await takeSharedFiles().catch(() => null);
+  if (shared?.files) {
+    location.hash = 'archivos';
+    XF.enqueue(shared.files);
+    toast(`Enviando ${plural(shared.files.length, 'archivo', 'archivos')} al ordenador…`);
+  } else if (shared?.text) { location.hash = 'archivos'; xTextForm(shared.text); }
+  else if (shared) { ui.view = 'listas'; render(); addForm(shared); }
 })();

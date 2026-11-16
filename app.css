@@ -175,3 +175,40 @@ code { font-size: .85em; background: var(--surface-2); padding: 1px 5px; border-
 .imp-res { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 #imp-text, #excl { min-height: 140px; font-size: .9rem; }
 .form .row { justify-content: flex-end; }
+
+/* ───── Archivos (intercambio con el ordenador) ───── */
+.xf-send { display: flex; gap: 8px; margin: 6px 0 12px; }
+.xf-pick { flex: 1; min-height: 52px; font-size: 1rem; position: relative; }
+.xf-send > .btn:not(.xf-pick) { flex: none; min-height: 52px; }
+.xf-up { list-style: none; margin: 0 0 12px; padding: 10px 12px; display: grid; gap: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-m); }
+.xf-up li { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; font-size: .9rem; }
+.xf-up li .xf-bar, .xf-up li .row { grid-column: 1 / -1; }
+.xf-up li.err .xf-meta { color: var(--danger); grid-column: 1 / -1; }
+.xf-up .row .btn { min-height: 36px; padding: 6px 12px; font-size: .88rem; }
+.xf-head { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
+.xf-head .count { flex: 1; margin: 0; }
+.xf-live { font-size: .78rem; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
+.xf-live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #2e9b57; }
+.xf-list { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-m); overflow: hidden; }
+.xf-row { display: flex; align-items: center; border-top: 1px solid var(--line); }
+.xf-row:first-child { border-top: 0; }
+.xf-row.fresh { box-shadow: inset 3px 0 0 var(--accent); background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface)); }
+.xf-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 10px 4px 10px 12px; background: none; border: 0; text-align: left; cursor: pointer; }
+.xf-ic { flex: none; width: 52px; height: 52px; border-radius: var(--radius-s); background: var(--surface-2); display: grid; place-items: center; overflow: hidden; color: var(--muted); }
+.xf-ic img { width: 100%; height: 100%; object-fit: cover; }
+.xf-ic svg { width: 26px; height: 26px; }
+.xf-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.xf-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xf-meta { font-size: .8rem; color: var(--muted); }
+.xf-new { display: inline-block; background: var(--accent); color: var(--accent-ink); border-radius: 999px; padding: 0 7px; font-size: .72rem; font-weight: 600; }
+.xf-snip { font-size: .85rem; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xf-bar { display: block; height: 4px; border-radius: 4px; background: var(--line); overflow: hidden; margin-top: 3px; }
+.xf-bar i { display: block; height: 100%; background: var(--accent); transition: width .15s; }
+.xf-get { flex: none; width: 52px; height: 52px; margin-right: 6px; color: var(--accent); }
+.xf-get svg { width: 24px; height: 24px; }
+.xf-foot { margin-top: 14px; }
+.xf-acts { margin-bottom: 10px; }
+.xf-acts a.btn { text-decoration: none; }
+.xf-pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); border-radius: var(--radius-s); padding: 10px 12px; margin: 0; font: inherit; max-height: 50dvh; overflow: auto; user-select: text; }
+.viewer video, .viewer audio { width: 100%; max-height: 60dvh; }
+.nav a span:not(.badge) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }

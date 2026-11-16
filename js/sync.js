@@ -418,3 +418,22 @@ export async function shotImage(fileId, type) {
   if (type === 'image/jpeg') await idb.set(cacheKey, blob); // solo las miniaturas: las completas pueden ocupar mucho
   return blob;
 }
+
+/* ───────── Archivos del intercambio: misma clave que los datos ───────── */
+
+/** { key, salt } para cifrar un archivo si los datos están cifrados; null si no. LockedError si falta la clave. */
+export function sealKey() {
+  if (!state.encrypted) return null;
+  const key = keyFor(state.salt);
+  if (!key) throw new LockedError(state.salt);
+  return { key, salt: state.salt };
+}
+/** Clave recordada (o de esta sesión) para una sal concreta, o null. */
+export const keyForSalt = salt => keyFor(salt);
+
+/** Lo compartido desde otra app que dejó el service worker (sw.js), una sola vez. */
+export async function takeShared() {
+  const p = await idb.get('share');
+  if (p) await idb.del('share');
+  return p && Date.now() - (p.at || 0) < 10 * 60 * 1000 ? p : null;
+}

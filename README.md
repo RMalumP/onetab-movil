@@ -13,6 +13,13 @@ PWA para gestionar desde el móvil las pestañas que guardas con la extensión *
 - **Sin conexión**: muestra la última copia y guarda los cambios en cola; se suben al volver la conexión.
 - **Exportar** en formato OneTab (`dirección | título`).
 
+### Novedades de la 1.2
+- **Archivos**: bandeja compartida con el ordenador (necesita OneTab Drive 4.10, herramienta «Archivos del móvil»). «Enviar al ordenador» sube fotos, vídeos o cualquier archivo con barra de progreso; «Texto» manda un texto o enlace. Lo que llega del ordenador sale marcado como «Nuevo» (con contador en la pestaña); la flecha lo guarda con un toque y al tocar la fila se ve (imágenes, vídeo, audio, texto) con Guardar, Compartir, Copiar y Borrar.
+- **Compartir → OneTab** desde la galería o cualquier app: los archivos se envían directamente a la bandeja. Los enlaces siguen yendo a «Añadir enlaces», y un texto sin enlace abre «Enviar un texto al ordenador».
+- **En directo** solo mientras la pestaña Archivos está abierta y a la vista (una petición en espera a Dropbox); fuera de ella no escucha nada.
+- Con el cifrado activado, los archivos se suben cifrados con la misma contraseña (formato de las capturas). La carpeta es `Intercambio` dentro de la de la app en Dropbox.
+- Tras publicar la 1.2, Android actualiza el menú Compartir de la app instalada al cabo de un rato (o reinstálala para tenerlo ya).
+
 ### Novedades de la 1.1
 - **Abrir y quitar**: desliza una pestaña a la izquierda para abrirla y sacarla de la lista (o solo quitarla, según Ajustes).
 - **Deshacer** tras quitar, mover, juntar, dividir, ordenar, mandar a la papelera, limpiar duplicados o importar.
@@ -27,7 +34,7 @@ PWA para gestionar desde el móvil las pestañas que guardas con la extensión *
 
 ## Cómo convive con la extensión
 
-Cada cambio se aplica sobre la versión más reciente del archivo y se sube con «solo si sigue en esta revisión»; si otro equipo subió algo entretanto, se vuelve a aplicar sobre lo nuevo. La extensión fusiona después igual que con cualquier otro equipo (por grupo, con lápidas para los borrados). `lib/ops.js`, `lib/util.js` y `lib/pack.js` son copias exactas de la extensión, y `lib/crypto.js` es su parte pura: si cambia el formato en la extensión, hay que copiarlos de nuevo.
+Cada cambio se aplica sobre la versión más reciente del archivo y se sube con «solo si sigue en esta revisión»; si otro equipo subió algo entretanto, se vuelve a aplicar sobre lo nuevo. La extensión fusiona después igual que con cualquier otro equipo (por grupo, con lápidas para los borrados). `lib/ops.js`, `lib/util.js`, `lib/pack.js` y `lib/xfer.js` son copias exactas de la extensión, y `lib/crypto.js` es su parte pura: si cambia el formato en la extensión, hay que copiarlos de nuevo.
 
 ## Puesta en marcha
 
@@ -37,4 +44,4 @@ Cada cambio se aplica sobre la versión más reciente del archivo y se sube con 
 
 ## Privacidad
 
-El token de Dropbox y, si lo eliges, la clave derivada de tu contraseña (nunca la contraseña) se guardan solo en el almacenamiento de este navegador. La política de seguridad de la página solo permite conectar con `api.dropboxapi.com` y `content.dropboxapi.com`.
+El token de Dropbox y, si lo eliges, la clave derivada de tu contraseña (nunca la contraseña) se guardan solo en el almacenamiento de este navegador. La política de seguridad de la página solo permite conectar con `api.dropboxapi.com`, `content.dropboxapi.com` y `notify.dropboxapi.com` (avisos de cambios en la bandeja).
