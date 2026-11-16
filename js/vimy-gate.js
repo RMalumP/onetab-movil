@@ -10,7 +10,7 @@ import * as dbx from './dropbox.js';
 // SHA-256 de «vimy-movil:» + correo de la cuenta autorizada (el correo no se publica en claro).
 const OWNER = 'b49305f9b25027048f55a09c2c0ab2dde756d91999c4476d8e2ecde9845550a8';
 const KEY_PATH = '/vimy/llave.json';
-const RECHECK_AFTER_MS = 60 * 1000;    // en segundo plano más de esto → se vuelve a comprobar la cuenta
+const RECHECK_AFTER_MS = 60 * 1000;    // fuera de la vista más de esto → se vuelve a comprobar la cuenta (la búsqueda no se para)
 const MAX_FAILS = 5, BLOCK_MS = 5 * 60 * 1000;
 const enc = new TextEncoder(), dec = new TextDecoder();
 const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
@@ -21,6 +21,27 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;',
 const hex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
 
 class Denied extends Error {}
+
+/* ───── Modo ahorro en segundo plano ─────
+   Vimy hace las peticiones con esta función. Con la app oculta solo deja BG_MAX a la vez (menos radio y CPU);
+   sin temporizadores encadenados, que el navegador ralentiza en segundo plano. Lo que espera turno no cuenta para
+   el límite de 15 s de Vimy: el tiempo empieza al salir la petición. */
+const BG_MAX = 2, REQ_TIMEOUT = 15000;
+let active = 0;
+const waiters = [];
+const nextWaiter = () => { const w = waiters.shift(); if (w) w(); };
+async function ecoFetch(url, opts = {}) {
+  while (document.hidden && active >= BG_MAX) await new Promise(r => waiters.push(r));
+  active++;
+  const { signal, ...rest } = opts;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), REQ_TIMEOUT);
+  const onAbort = () => ctrl.abort();
+  if (signal && !signal.aborted) signal.addEventListener('abort', onAbort, { once: true });
+  try { return await fetch(url, { ...rest, signal: ctrl.signal }); }
+  finally { clearTimeout(t); signal?.removeEventListener('abort', onAbort); active--; nextWaiter(); }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) while (waiters.length) nextWaiter(); });
 
 /* ───── Cuenta ───── */
 async function checkAccount() {
@@ -156,7 +177,10 @@ async function unlock(container, file, { allowSetup }) {
         return o;
       });
     } catch (e) {
-      if (e instanceof Denied || e instanceof dbx.NotConnectedError) return message(container, 'Sin acceso', e.message);
+      if (e instanceof Denied || e instanceof dbx.NotConnectedError) {
+        deniedCbs.forEach(cb => { try { cb(); } catch {} });
+        return message(container, 'Sin acceso', e.message);
+      }
       await message(container, 'No se pudo comprobar', (navigator.onLine ? '' : 'Sin conexión. ') + 'No se pudo hablar con Dropbox (' + (e?.message || e) + ').', true);
     }
   }
@@ -164,12 +188,11 @@ async function unlock(container, file, { allowSetup }) {
 
 /* ───── Al volver de segundo plano ───── */
 let locked = false, hiddenAt = 0;
-const unlockedQ = [], lockCbs = [];
+const unlockedQ = [], deniedCbs = [];
 function whenUnlocked(cb) { if (!locked) cb(); else unlockedQ.push(cb); }
 async function recheck() {
   if (locked) return;
   locked = true;
-  lockCbs.forEach(cb => { try { cb(); } catch {} });
   const ov = document.createElement('div');
   ov.className = 'vlock';
   ov.innerHTML = '<div class="gate"></div>';
@@ -217,8 +240,9 @@ document.addEventListener('visibilitychange', () => {
     saveCp: cp => (cpBusy = cpBusy.then(() => vault.set('checkpoint', cp)).catch(() => {})),
     loadCp: () => cpBusy.then(() => vault.get('checkpoint')),
     clearCp: () => (cpBusy = cpBusy.then(() => vault.del('checkpoint')).catch(() => {})),
+    fetch: ecoFetch,
     whenUnlocked,
-    onLock: cb => lockCbs.push(cb)
+    onDenied: cb => deniedCbs.push(cb)
   };
 
   const bar = document.createElement('div');
