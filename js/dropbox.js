@@ -257,13 +257,3 @@ export async function thumbs(entries) {
   }
   return out;
 }
-
-/* ── Vimy: cuenta conectada y archivos pequeños de texto (para la llave de Vimy) ── */
-export const currentAccount = () => rpc('users/get_current_account');
-export async function readTextOrNull(path) {
-  try { return await (await call(`${CONTENT}/files/download`, { arg: { path } })).text(); }
-  catch (e) { if (e instanceof DbxError && /not_found/.test(e.summary || '')) return null; throw e; }
-}
-export async function writeText(path, text) {
-  return (await call(`${CONTENT}/files/upload`, { headers: { 'Content-Type': 'application/octet-stream' }, body: new Blob([text]), arg: { path, mode: { '.tag': 'overwrite' }, mute: true } })).json();
-}
