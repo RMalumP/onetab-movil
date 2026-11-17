@@ -10,7 +10,7 @@ import { LockedError } from '../lib/crypto.js';
 import * as XF from './exchange.js';
 import { kindOf, fmtSize, textNoteName, lonelyUrl } from '../lib/xfer.js';
 
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.4.1';
 const $ = (s, el = document) => el.querySelector(s);
 const app = $('#app');
 const sheet = $('#sheet');
@@ -588,7 +588,7 @@ function viewArchivos() {
     : X.loading || !X.loaded ? (X.error ? '' : '<p class="boot">Cargando la bandeja…</p>')
     : `<div class="empty"><h2>La bandeja está vacía</h2><p>Lo que sueltes en <b>Archivos del móvil</b> de la extensión aparecerá aquí${X.live ? ' al momento' : ''}.</p></div>`;
   return `<div class="xf-send">
-      <label class="btn primary xf-pick">${I.upload}<span>Enviar al ordenador</span><input type="file" id="xf-file" multiple hidden></label>
+      <button class="btn primary xf-pick" data-xfpick>${I.upload}<span>Enviar al ordenador</span></button>
       <button class="btn" data-xftext>${I.note}<span>Texto</span></button>
     </div>
     ${ups ? `<ul class="xf-up">${ups}</ul>` : ''}
@@ -787,7 +787,7 @@ function viewImportar() {
   return `<section class="panel"><h2>Importar listas</h2>
     <p class="muted small">Pega enlaces o una exportación de OneTab («dirección | título», listas separadas por una línea en blanco), o elige un archivo TXT, CSV, JSON o de marcadores HTML exportado por OneTab Drive o por tu navegador.</p>
     <textarea class="field" id="imp-text" placeholder="https://…">${esc(imp?.text || '')}</textarea>
-    <div class="row" style="margin-top:8px"><label class="btn">${I.folder} Elegir archivo<input type="file" id="imp-file" accept=".txt,.csv,.json,.html,.htm,text/*" hidden></label>
+    <div class="row" style="margin-top:8px"><button class="btn" data-imppick>${I.folder} Elegir archivo</button>
       <button class="btn primary" data-imp-parse>Revisar</button></div>
     ${imp?.result ? `<div class="imp-res"><p><b>${plural(imp.result.groups.length, 'lista', 'listas')}</b> con ${plural(imp.result.groups.reduce((n, g) => n + g.tabs.length, 0), 'pestaña', 'pestañas')} (formato ${esc(imp.result.format.toUpperCase())}).</p>
       <label class="small">Carpeta<select class="field" id="imp-folder">${folderOptions().map(([v, l]) => `<option value="${esc(v)}">${esc(v ? l : 'La de cada lista / sin carpeta')}</option>`).join('')}</select></label>
@@ -981,6 +981,8 @@ app.addEventListener('click', e => {
   const ds = t.dataset;
   if ('sync' in ds) return S.sync();
   if ('xftext' in ds) return xTextForm();
+  if ('xfpick' in ds) return pickToSend();
+  if ('imppick' in ds) return pickToImport();
   if ('xfrefresh' in ds) return XF.refresh();
   if (ds.xfopen) { const e = xEntry(ds.xfopen); return e && xSheet(e); }
   if (ds.xfget) { const e = xEntry(ds.xfget); return e && xSave(e); }
@@ -1061,16 +1063,45 @@ app.addEventListener('change', async e => {
   if (id === 'f-sort') { prefs.set('sort', e.target.value); render(); }
   if (id === 'theme') { prefs.set('theme', e.target.value); applyTheme(); }
   if (id === 'swipe') { prefs.set('swipe', e.target.value); toast('Guardado'); }
-  if (id === 'xf-file') { const files = [...e.target.files]; e.target.value = ''; if (files.length) XF.enqueue(files); }
-  if (id === 'imp-file') {
-    const file = e.target.files[0];
-    if (!file) return;
+});
+
+/**
+ * Selector de archivos que vive fuera de #app. Si el <input type="file"> estuviera dentro, cualquier repintado
+ * mientras el selector del móvil está abierto (al volver a la app se sincroniza y se repinta) lo sustituye por
+ * otro y el «change» llega a un elemento ya quitado: los archivos elegidos se perdían sin aviso.
+ */
+const picker = Object.assign(document.createElement('input'), { type: 'file', hidden: true });
+document.body.append(picker);
+let onPicked = null;
+picker.addEventListener('change', () => {
+  const files = [...picker.files];
+  picker.value = '';
+  const fn = onPicked; onPicked = null;
+  if (files.length && fn) fn(files);
+});
+function pickFiles({ multiple = false, accept = '' } = {}, fn) {
+  picker.multiple = multiple;
+  picker.accept = accept;
+  onPicked = fn;
+  picker.click();
+}
+
+function pickToSend() {
+  pickFiles({ multiple: true }, files => {
+    XF.enqueue(files);
+    toast(`Enviando ${plural(files.length, 'archivo', 'archivos')} al ordenador…`);
+  });
+}
+
+function pickToImport() {
+  pickFiles({ accept: '.txt,.csv,.json,.html,.htm,text/*' }, async ([file]) => {
     if (file.size > 20 * 1024 * 1024) return toast('El archivo es demasiado grande.');
     ui.importing = { text: await file.text(), fileName: file.name };
-    $('#imp-text').value = ui.importing.text.slice(0, 200000);
+    const ta = $('#imp-text');
+    if (ta) ta.value = ui.importing.text.slice(0, 200000);
     doImportParse();
-  }
-});
+  });
+}
 
 /* ── Deslizar una pestaña a la izquierda: abrir y quitar (o solo quitar) ── */
 let sw = null;

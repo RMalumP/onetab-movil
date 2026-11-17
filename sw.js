@@ -1,5 +1,5 @@
 // Service worker: guarda la app para abrirla sin conexión. Los datos (Dropbox) nunca pasan por aquí.
-const VERSION = 'otm-1.4.0';
+const VERSION = 'otm-1.4.1';
 const SHELL = [
   './', 'index.html', 'app.css', 'manifest.webmanifest', 'config.js',
   'js/app.js', 'js/sync.js', 'js/dropbox.js', 'js/exchange.js',

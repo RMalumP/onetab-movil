@@ -98,9 +98,11 @@ export function enqueue(files, text = null) {
 
 /** Los envíos esperan a saber si los datos están cifrados (y a tener la clave). */
 const ready = () => S.state.loaded && S.state.status !== 'locked';
+/** Espera a tener los datos o a que la sincronización falle (entonces los envíos se marcan con error y se pueden reintentar). */
+const settled = () => ready() || S.state.status === 'error' || S.state.status === 'offline';
 function whenReady() {
-  if (ready()) return Promise.resolve();
-  return new Promise(res => { const off = S.subscribe(() => { if (ready()) { off(); res(); } }); });
+  if (settled()) return Promise.resolve();
+  return new Promise(res => { const off = S.subscribe(() => { if (settled()) { off(); res(); } }); });
 }
 
 async function pump() {
@@ -108,6 +110,12 @@ async function pump() {
   pumping = true;
   try {
     await whenReady();
+    if (!ready()) {
+      const why = S.state.status === 'offline' ? 'Sin conexión.' : `No se pudo conectar con Dropbox${S.state.error ? ': ' + S.state.error : ''}.`;
+      X.uploads.filter(x => !x.done && !x.error && !x.started).forEach(x => { x.error = why + ' Pulsa Reintentar.'; });
+      emit();
+      return;
+    }
     for (let u; (u = X.uploads.find(x => !x.done && !x.error && !x.started));) {
       u.started = true; emit();
       try {
