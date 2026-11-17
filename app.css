@@ -212,3 +212,7 @@ code { font-size: .85em; background: var(--surface-2); padding: 1px 5px; border-
 .xf-pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); border-radius: var(--radius-s); padding: 10px 12px; margin: 0; font: inherit; max-height: 50dvh; overflow: auto; user-select: text; }
 .viewer video, .viewer audio { width: 100%; max-height: 60dvh; }
 .nav a span:not(.badge) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.xf-del { flex: none; width: 44px; height: 52px; margin-right: 4px; color: var(--muted); }
+.xf-get { margin-right: 0; }
+.xf-up-sum { border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.xf-retry { margin: -4px 0 12px; }

@@ -10,7 +10,7 @@ import { LockedError } from '../lib/crypto.js';
 import * as XF from './exchange.js';
 import { kindOf, fmtSize, textNoteName, lonelyUrl } from '../lib/xfer.js';
 
-const APP_VERSION = '1.4.1';
+const APP_VERSION = '1.5.0';
 const $ = (s, el = document) => el.querySelector(s);
 const app = $('#app');
 const sheet = $('#sheet');
@@ -574,6 +574,7 @@ function xRow(e) {
         <span class="xf-bar" data-xfbar="${esc(e.id)}" ${busy == null ? 'hidden' : ''}><i style="width:${Math.round((busy || 0) * 100)}%"></i></span></span>
     </button>
     <button class="icon-btn xf-get" data-xfget="${esc(e.id)}" aria-label="Guardar ${esc(e.name)}">${I.download}</button>
+    <button class="icon-btn xf-del" data-xfdel="${esc(e.id)}" aria-label="Borrar ${esc(e.name)}">${I.trash}</button>
   </div>`;
 }
 
@@ -581,9 +582,11 @@ function viewArchivos() {
   const X = XF.X;
   const ups = X.uploads.map((u, i) => `<li class="${u.error ? 'err' : ''}">
     <span class="xf-name">${esc(u.name)}</span>
-    <span class="xf-meta">${u.error ? esc(u.error) : u.done ? 'Enviado ✓' : u.started ? `${Math.round(u.sent / (u.size || 1) * 100)} %` : 'Esperando…'}</span>
+    <span class="xf-meta">${u.error ? esc(u.error) : u.done ? 'Enviado ✓' : u.note ? esc(u.note) : u.started ? `${Math.round(u.sent / (u.size || 1) * 100)} %` : 'En cola'}</span>
     ${u.error ? `<span class="row">${u.file ? `<button class="btn" data-xfretry="${i}">Reintentar</button>` : ''}${u.code === 'too-big-encrypted' && u.file ? `<button class="btn" data-xfplain="${i}">Enviar sin cifrar</button>` : ''}<button class="btn" data-xfdismiss="${i}">Quitar</button></span>`
       : u.done ? '' : `<span class="xf-bar"><i style="width:${Math.round(u.sent / (u.size || 1) * 100)}%"></i></span>`}</li>`).join('');
+  const failed = X.uploads.filter(u => u.error && u.file).length;
+  const sending = X.uploads.filter(u => !u.done && !u.error).length;
   const list = X.entries.length ? `<div class="xf-list">${X.entries.map(xRow).join('')}</div>`
     : X.loading || !X.loaded ? (X.error ? '' : '<p class="boot">Cargando la bandeja…</p>')
     : `<div class="empty"><h2>La bandeja está vacía</h2><p>Lo que sueltes en <b>Archivos del móvil</b> de la extensión aparecerá aquí${X.live ? ' al momento' : ''}.</p></div>`;
@@ -591,10 +594,12 @@ function viewArchivos() {
       <button class="btn primary xf-pick" data-xfpick>${I.upload}<span>Enviar al ordenador</span></button>
       <button class="btn" data-xftext>${I.note}<span>Texto</span></button>
     </div>
-    ${ups ? `<ul class="xf-up">${ups}</ul>` : ''}
+    ${ups ? `<ul class="xf-up">${sending > 1 ? `<li class="xf-up-sum"><span class="xf-meta">Subiendo ${sending} archivos (hasta 3 a la vez). Deja la app abierta hasta que terminen.</span></li>` : ''}${ups}</ul>` : ''}
+    ${failed > 1 ? `<div class="row xf-retry"><button class="btn" data-xfretryall>${I.sync} Reintentar los ${failed} que fallaron</button></div>` : ''}
     <div class="xf-head"><span class="count">${X.entries.length ? plural(X.entries.length, 'archivo', 'archivos') : ''}</span>
       ${X.live ? '<span class="xf-live">En directo</span>' : ''}
-      <button class="icon-btn" data-xfrefresh aria-label="Actualizar">${I.sync}</button></div>
+      <button class="icon-btn" data-xfrefresh aria-label="Actualizar">${I.sync}</button>
+      ${X.entries.length ? `<button class="icon-btn" data-xfclear aria-label="Vaciar la bandeja" title="Vaciar la bandeja">${I.trash}</button>` : ''}</div>
     ${X.error ? `<p class="err">${esc(X.error)}</p>` : ''}
     ${list}
     <p class="muted small xf-foot">Truco: desde la galería o cualquier app, <b>Compartir → OneTab</b> lo envía directamente. Los archivos están en tu Dropbox (Aplicaciones › … › Intercambio)${S.state.encrypted ? ' y se suben cifrados con tu contraseña' : ''}.</p>`;
@@ -986,6 +991,18 @@ app.addEventListener('click', e => {
   if ('xfrefresh' in ds) return XF.refresh();
   if (ds.xfopen) { const e = xEntry(ds.xfopen); return e && xSheet(e); }
   if (ds.xfget) { const e = xEntry(ds.xfget); return e && xSave(e); }
+  if (ds.xfdel) {
+    const e = xEntry(ds.xfdel);
+    if (!e || !confirm(`¿Borrar «${e.name}»? Desaparece también del ordenador.`)) return;
+    return XF.remove(e).then(() => toast('Borrado'), err => toast('No se pudo borrar: ' + (err.message || err)));
+  }
+  if ('xfclear' in ds) {
+    const n = XF.X.entries.length;
+    if (!n || !confirm(`¿Borrar los ${n} archivos de la bandeja? Desaparecen también del ordenador (Dropbox los guarda 30 días en su papelera).`)) return;
+    toast('Vaciando…');
+    return XF.clearAll().then(k => toast(`${plural(k, 'archivo borrado', 'archivos borrados')}`));
+  }
+  if ('xfretryall' in ds) return XF.retryAll();
   if (ds.xfretry) return XF.retry(+ds.xfretry);
   if (ds.xfplain) return XF.retry(+ds.xfplain, true);
   if (ds.xfdismiss) return XF.dismiss(+ds.xfdismiss);
