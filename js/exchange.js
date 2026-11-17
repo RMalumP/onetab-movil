@@ -98,9 +98,61 @@ export function enqueue(files, text = null) {
 
 /** Los envíos esperan a saber si los datos están cifrados (y a tener la clave). */
 const ready = () => S.state.loaded && S.state.status !== 'locked';
+/** Espera a tener los datos o a que la sincronización falle (entonces los envíos se marcan con error y se pueden reintentar). */
+const settled = () => ready() || S.state.status === 'error' || S.state.status === 'offline';
 function whenReady() {
-  if (ready()) return Promise.resolve();
-  return new Promise(res => { const off = S.subscribe(() => { if (ready()) { off(); res(); } }); });
+  if (settled()) return Promise.resolve();
+  return new Promise(res => { const off = S.subscribe(() => { if (settled()) { off(); res(); } }); });
+}
+
+const PARALLEL = 3;     // envíos simultáneos
+const ATTEMPTS = 3;     // intentos por archivo ante cortes de red o errores pasajeros de Dropbox
+
+/** Mantiene la pantalla encendida mientras se sube algo: si el móvil se bloquea, el navegador corta la subida. */
+let wake = null;
+async function keepAwake(on) {
+  try {
+    if (on && !wake && navigator.wakeLock && document.visibilityState === 'visible') {
+      wake = await navigator.wakeLock.request('screen');
+      wake.addEventListener('release', () => { wake = null; });
+    } else if (!on && wake) { const w = wake; wake = null; await w.release(); }
+  } catch { /* sin Wake Lock: no pasa nada */ }
+}
+document.addEventListener('visibilitychange', () => { if (pumping && document.visibilityState === 'visible') keepAwake(true); });
+
+const transient = e => !navigator.onLine || e instanceof TypeError || (e instanceof dbx.DbxError && (e.status >= 500 || e.status === 429));
+
+async function sendOne(u) {
+  u.started = true; emit();
+  for (let attempt = 1; ; attempt++) {
+    try {
+      if (u.size > MAX_SIZE) throw new Error('Supera los 2 GB.');
+      let body = u.file;
+      const k = u.plain ? null : S.sealKey();
+      if (k) {
+        if (u.size > ENC_MAX) { const e = new Error(`Con el cifrado activo el máximo es ${Math.round(ENC_MAX / 1048576)} MB.`); e.code = 'too-big-encrypted'; throw e; }
+        body = new Blob([await seal(new Uint8Array(await u.file.arrayBuffer()), k.key, k.salt)]);
+      }
+      u.sent = 0;
+      const meta = await dbx.putFile(`${FOLDER}/${safeFileName(u.name)}`, body, n => { u.sent = n; emit(); });
+      u.done = true; u.sent = u.size; u.file = null; u.note = '';
+      markSeen([meta.id]);
+      if (!X.entries.some(e => e.id === meta.id)) X.entries.unshift({ ...meta, '.tag': 'file' });
+      if (u.text != null) X.texts.set(meta.id, u.text);
+      return;
+    } catch (e) {
+      if (attempt < ATTEMPTS && transient(e)) {
+        u.note = `Reintentando (${attempt + 1}/${ATTEMPTS})…`; emit();
+        await new Promise(r => setTimeout(r, 1500 * attempt));
+        if (!navigator.onLine) await new Promise(r => window.addEventListener('online', r, { once: true }));
+        continue;
+      }
+      u.note = '';
+      u.error = e instanceof LockedError ? 'Falta la contraseña de cifrado.' : transient(e) ? 'Se cortó la conexión.' : (e.message || String(e));
+      u.code = e.code || '';
+      return;
+    } finally { emit(); }
+  }
 }
 
 async function pump() {
@@ -108,28 +160,17 @@ async function pump() {
   pumping = true;
   try {
     await whenReady();
-    for (let u; (u = X.uploads.find(x => !x.done && !x.error && !x.started));) {
-      u.started = true; emit();
-      try {
-        if (u.size > MAX_SIZE) throw new Error('Supera los 2 GB.');
-        let body = u.file;
-        const k = u.plain ? null : S.sealKey();
-        if (k) {
-          if (u.size > ENC_MAX) { const e = new Error(`Con el cifrado activo el máximo es ${Math.round(ENC_MAX / 1048576)} MB.`); e.code = 'too-big-encrypted'; throw e; }
-          body = new Blob([await seal(new Uint8Array(await u.file.arrayBuffer()), k.key, k.salt)]);
-        }
-        const meta = await dbx.putFile(`${FOLDER}/${safeFileName(u.name)}`, body, n => { u.sent = n; emit(); });
-        u.done = true; u.sent = u.size; u.file = null;
-        markSeen([meta.id]);
-        if (!X.entries.some(e => e.id === meta.id)) X.entries.unshift({ ...meta, '.tag': 'file' });
-        if (u.text != null) X.texts.set(meta.id, u.text);
-      } catch (e) {
-        u.error = e instanceof LockedError ? 'Falta la contraseña de cifrado.' : (!navigator.onLine || e instanceof TypeError) ? 'Sin conexión. Pulsa para reintentar.' : (e.message || String(e));
-        u.code = e.code || '';
-      }
+    if (!ready()) {
+      const why = S.state.status === 'offline' ? 'Sin conexión.' : `No se pudo conectar con Dropbox${S.state.error ? ': ' + S.state.error : ''}.`;
+      X.uploads.filter(x => !x.done && !x.error && !x.started).forEach(x => { x.error = why; });
       emit();
+      return;
     }
-  } finally { pumping = false; }
+    keepAwake(true);
+    const next = () => X.uploads.find(x => !x.done && !x.error && !x.started);
+    // Varios a la vez: cada «hilo» toma el siguiente pendiente (también los que se añadan mientras tanto).
+    await Promise.all(Array.from({ length: PARALLEL }, async () => { for (let u; (u = next());) await sendOne(u); }));
+  } finally { pumping = false; keepAwake(false); }
   extras();
   setTimeout(() => { if (!pumping) { X.uploads = X.uploads.filter(u => !u.done); emit(); } }, 5000);
 }
@@ -142,6 +183,11 @@ export function retry(i, plain = false) {
   emit(); pump();
 }
 export function dismiss(i) { X.uploads.splice(i, 1); emit(); }
+/** Reintenta todos los fallidos que aún se pueden reenviar. */
+export function retryAll() {
+  X.uploads.forEach(u => { if (u.error && u.file) Object.assign(u, { error: '', code: '', started: false, sent: 0 }); });
+  emit(); pump();
+}
 
 /* ───────── Recibir ───────── */
 
@@ -155,6 +201,16 @@ export async function fetchFile(entry, onProgress = () => {}) {
     u8 = await unseal(u8, key);
   }
   return new Blob([u8], { type: mimeOf(entry.name) });
+}
+
+/** Borra todos los archivos de la bandeja (de varios en varios). Devuelve cuántos se borraron. */
+export async function clearAll() {
+  const list = [...X.entries];
+  let n = 0;
+  await Promise.all(Array.from({ length: 4 }, async () => {
+    for (let e; (e = list.shift());) { try { await dbx.removeFile(e.id); X.entries = X.entries.filter(x => x.id !== e.id); X.fresh.delete(e.id); n++; emit(); } catch { /* sigue con el resto */ } }
+  }));
+  return n;
 }
 
 export async function remove(entry) {
