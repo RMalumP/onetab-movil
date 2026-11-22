@@ -4,7 +4,7 @@ PWA para gestionar desde el móvil las pestañas que guardas con la extensión *
 
 ## Qué hace
 
-- **Listas**: buscar (título, dirección, `#etiqueta`), filtrar por carpeta, destacadas o equipo, ordenar; abrir, copiar o compartir pestañas y listas enteras.
+- **Listas**: buscar (título, dirección, `#etiqueta`), filtrar por carpeta, destacadas o equipo, ordenar (botón junto al buscador); abrir, copiar o compartir pestañas y listas enteras.
 - **Organizar**: destacar, renombrar, notas, etiquetas, mover a carpeta, mover una pestaña a otra lista, quitar pestañas, bloquear, papelera (restaurar, borrar, vaciar), crear/renombrar/borrar carpetas.
 - **Entre equipos**: este móvil aparece en «Enviar a otro equipo» de la extensión; lo recibido sale en **Recibidas** (con contador en el icono). Desde el móvil puedes **enviar** enlaces o listas a cualquier ordenador.
 - **Compartir desde Android**: instalada, aparece en el menú *Compartir* de cualquier app; el enlace se guarda en tus listas o se manda a un ordenador.
@@ -12,6 +12,15 @@ PWA para gestionar desde el móvil las pestañas que guardas con la extensión *
 - **Cifrado**: si activaste el cifrado en la extensión, pide la misma contraseña (AES-GCM 256 + PBKDF2, idéntico formato). Puedes recordarla en el dispositivo o pedirla cada vez.
 - **Sin conexión**: muestra la última copia y guarda los cambios en cola; se suben al volver la conexión.
 - **Exportar** en formato OneTab (`dirección | título`).
+
+### Novedades de la 1.5.1 (correcciones)
+- **Búsqueda con el teclado de Android**: ya no se corrompe lo que escribes (antes «relleno» acababa como «rrerelrell…»). Al buscar, la lista vuelve arriba.
+- **Nada se borra mientras escribes**: la sincronización en segundo plano ya no vacía la contraseña de cifrado, el texto de Importar, los Sitios excluidos ni el nombre del móvil.
+- **«Abrir»** ya no avisa de un bloqueo falso; solo cuenta las pestañas que el navegador bloqueó de verdad.
+- **Enviar a otro equipo** manda una copia y tu lista se queda en Listas, como en la extensión. Las que ya estaban en «Enviadas a otros equipos» tienen «Traer a mis listas» y «Cancelar el envío», ambas con Deshacer.
+- **Ordenar** pasa a un botón junto al buscador; la barra de selección cabe en móviles de 360 px.
+- Las direcciones que acaban en «)» (Wikipedia) se guardan enteras.
+- Detalles: icono de Volver propio, «Abrir la página» sin subrayar, contadores y casillas legibles en modo oscuro, columnas de la vista previa de copias, recordatorios sin opciones repetidas los domingos y menos memoria al ver imágenes y vídeos.
 
 ### Novedades de la 1.2
 - **Archivos**: bandeja compartida con el ordenador (necesita OneTab Drive 4.10, herramienta «Archivos del móvil»). «Enviar al ordenador» sube fotos, vídeos o cualquier archivo con barra de progreso; «Texto» manda un texto o enlace. Lo que llega del ordenador sale marcado como «Nuevo» (con contador en la pestaña); la flecha lo guarda con un toque y al tocar la fila se ve (imágenes, vídeo, audio, texto) con Guardar, Compartir, Copiar y Borrar.
