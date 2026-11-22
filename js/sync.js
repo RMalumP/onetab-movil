@@ -192,6 +192,22 @@ function applyOp(d, op) {
     case 'split': return g && stableIds(d, op, () => splitByDomain(d, g.id));
     case 'dedupe': return dedupeAll(d);
     case 'trashMany': for (const id of op.gids || []) if (d.groups[id] && !d.groups[id].locked) trashGroup(d, id); return;
+    case 'sendCopies': {   // copia de cada lista para otro equipo; la original se queda (como en la extensión)
+      if (!op.dev) return;
+      return stableIds(d, op, () => {
+        for (const id of op.gids || []) {
+          const src = d.groups[id];
+          if (!src || src.trashedAt) continue;
+          addGroup(d, { title: src.title, tabs: src.tabs.map(t => ({ url: t.url, title: t.title, tg: t.tg })), tabGroups: src.tabGroups || [],
+            origin: op.origin || null, targetDevice: op.dev, createdAt: op.at });
+        }
+      }, true);
+    }
+    case 'cancelSend': {   // un envío pendiente pasa a la papelera como lista normal (recuperable, ya no se entrega)
+      if (!g || g.locked) return;
+      updateGroup(d, g.id, { targetDevice: null });
+      return trashGroup(d, g.id);
+    }
     case 'updateMany': {
       const patch = Object.fromEntries(Object.entries(op.patch || {}).filter(([k]) => GROUP_FIELDS.includes(k)));
       for (const id of op.gids || []) if (d.groups[id]) updateGroup(d, id, patch);

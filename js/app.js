@@ -10,7 +10,7 @@ import { LockedError } from '../lib/crypto.js';
 import * as XF from './exchange.js';
 import { kindOf, fmtSize, textNoteName, lonelyUrl } from '../lib/xfer.js';
 
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.5.1';
 const $ = (s, el = document) => el.querySelector(s);
 const app = $('#app');
 const sheet = $('#sheet');
@@ -44,7 +44,7 @@ const I = {
   sync: svg('<path d="M20 11a8 8 0 0 0-14.9-3M4 13a8 8 0 0 0 14.9 3"/><path d="M4 4v4h4M20 20v-4h-4"/>'),
   check: svg('<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8 12l3 3 5-6"/>'),
   box: svg('<rect x="4" y="4" width="16" height="16" rx="4"/>'),
-  boxOn: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5" fill="currentColor"/><path d="M8 12l3 3 5-6" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  boxOn: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5" fill="currentColor"/><path class="box-tick" d="M8 12l3 3 5-6" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   clock: svg('<circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M5 3L2 6M19 3l3 3"/>'),
   sort: svg('<path d="M4 6h10M4 12h7M4 18h4M17 5v14M14 16l3 3 3-3"/>'),
   split: svg('<path d="M12 3v6M12 9l-6 6v6M12 9l6 6v6"/>'),
@@ -54,6 +54,7 @@ const I = {
   upload: svg('<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>'),
   block: svg('<circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/>'),
   chevron: svg('<path d="M9 6l6 6-6 6"/>'),
+  back: svg('<path d="M20 12H5M11 6l-6 6 6 6"/>'),
   download: svg('<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>'),
   files: svg('<path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M12 11v6M9.5 13.5L12 11l2.5 2.5"/>'),
   image: svg('<rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M4 17l5-5 4 4 3-3 4 4"/>'),
@@ -130,11 +131,19 @@ async function share({ title, text, url, files }) {
   } else copy(url || text);
 }
 
-/** Abre varias pestañas: el navegador suele bloquear todas menos la primera. */
+/**
+ * Abre varias pestañas: el navegador suele bloquear todas menos la primera.
+ * Sin «noopener» en window.open: con él devuelve siempre null y no se sabría cuáles se bloquearon de verdad.
+ * El enlace con la app se corta a mano (opener = null) antes de que cargue la página.
+ */
 function openMany(urls) {
   const list = urls.map(safeHref).filter(Boolean);
   let blocked = 0;
-  for (const u of list) if (!window.open(u, '_blank', 'noopener')) blocked++;
+  for (const u of list) {
+    const w = window.open(u, '_blank');
+    if (!w) { blocked++; continue; }
+    try { w.opener = null; } catch { /* otra ventana: ya no hay enlace */ }
+  }
   if (blocked) toast(`El navegador bloqueó ${blocked} de ${list.length}. Permite las ventanas emergentes o ábrelas una a una.`, 4500);
 }
 
@@ -142,11 +151,19 @@ const groupLinks = g => g.tabs.map(t => t.url).join('\n');
 const groupMarkdown = g => `${groupTitle(g)}\n` + g.tabs.map(t => `- ${t.title || t.url}: ${t.url}`).join('\n');
 
 /* ───────── Hoja inferior ───────── */
+// Cada hoja lleva un número: lo que llega tarde (una descarga) solo se pinta si su hoja sigue abierta.
+let sheetSeq = 0;
+let sheetUrls = [];   // URL de objeto de las imágenes y vídeos de la hoja: se liberan al cerrarla o sustituirla
+const freeSheetUrls = () => { sheetUrls.forEach(u => URL.revokeObjectURL(u)); sheetUrls = []; };
+/** URL de objeto que vive lo que la hoja abierta. */
+const sheetUrl = blob => { const u = URL.createObjectURL(blob); sheetUrls.push(u); return u; };
 function openSheet(html, bind) {
+  freeSheetUrls();
+  const seq = ++sheetSeq;
   sheet.innerHTML = `<div class="sheet-in"><div class="sheet-grip"></div>${html}</div>`;
   if (!sheet.open) sheet.showModal();
   sheet.scrollTop = 0;
-  bind?.(sheet);
+  bind?.(sheet, () => sheet.open && sheetSeq === seq);
 }
 const closeSheet = () => sheet.open && sheet.close();
 sheet.addEventListener('click', e => { if (e.target === sheet) closeSheet(); });
@@ -199,7 +216,10 @@ function remindSheet(gids) {
     S.enqueue(gids.length === 1 ? { type: 'update', gid: gids[0], patch: { remindAt: at } } : { type: 'updateMany', gids, patch: { remindAt: at } });
     toast(at ? 'Recordatorio: ' + remindLabel(at) : 'Recordatorio quitado');
   };
-  const presets = [['1h', 'Dentro de 1 hora'], ['eve', 'Esta tarde (18:00)'], ['tom', 'Mañana (9:00)'], ['mon', 'El lunes (9:00)']];
+  // Pasadas las 18:00 «esta tarde» es mañana, y los domingos «el lunes» es lo mismo que «mañana».
+  const eveTomorrow = new Date(presetTime('eve')).getDate() !== new Date().getDate();
+  const presets = [['1h', 'Dentro de 1 hora'], ['eve', eveTomorrow ? 'Mañana por la tarde (18:00)' : 'Esta tarde (18:00)'], ['tom', 'Mañana (9:00)'],
+    presetTime('mon') !== presetTime('tom') ? ['mon', 'El lunes (9:00)'] : null].filter(Boolean);
   menu('Recordar', gs.length === 1 ? groupTitle(gs[0]) : plural(gs.length, 'lista', 'listas'), [
     ...presets.map(([k, l]) => [I.clock, `${l} · ${remindLabel(presetTime(k))}`, () => set(presetTime(k))]),
     [I.edit, 'Elegir fecha y hora…', () => form('Fecha y hora', [{ name: 'at', label: 'Recordar el', type: 'datetime-local', value: '' }], 'Guardar', v => {
@@ -213,12 +233,14 @@ function remindSheet(gids) {
 
 function groupMenu(g) {
   const inbox = g.targetDevice === me().id;
+  const outgoing = !!g.targetDevice && !inbox;
   const domains = new Set(g.tabs.map(t => domainOf(t.url) || 'otros'));
   menu(groupTitle(g), `${plural(g.tabs.length, 'pestaña', 'pestañas')} · ${formatDate(g.createdAt)}${g.origin ? ' · desde ' + (devName(g.origin) || 'otro equipo') : ''}`, [
     [I.open, 'Abrir todas', () => openMany(g.tabs.map(t => t.url))],
     [I.copy, 'Copiar los enlaces', () => copy(groupLinks(g), 'Enlaces copiados')],
     [I.share, 'Compartir la lista', () => share({ title: groupTitle(g), text: groupMarkdown(g) })],
     inbox ? [I.inbox, 'Guardar en mis listas', () => S.enqueue({ type: 'update', gid: g.id, patch: { targetDevice: null } })] : null,
+    outgoing ? [I.inbox, 'Traer a mis listas', () => withUndo({ type: 'update', gid: g.id, patch: { targetDevice: null } }, 'La lista vuelve a estar en tus listas', [g.id])] : null,
     [g.starred ? I.starFill : I.star, g.starred ? 'Quitar de destacadas' : 'Destacar', () => S.enqueue({ type: 'update', gid: g.id, patch: { starred: !g.starred } })],
     [I.clock, g.remindAt ? 'Recordatorio: ' + remindLabel(g.remindAt) : 'Recordar…', () => remindSheet([g.id])],
     [I.edit, 'Cambiar el nombre', () => form('Nombre de la lista', [{ name: 'title', label: 'Nombre', value: g.title, placeholder: groupTitle(g) }], 'Guardar',
@@ -232,17 +254,30 @@ function groupMenu(g) {
     g.tabs.length > 1 ? [I.sort, 'Ordenar por título', () => withUndo({ type: 'sortTabs', gid: g.id, by: 'title' }, 'Ordenada por título', [g.id])] : null,
     g.tabs.length > 1 ? [I.sort, 'Ordenar por sitio', () => withUndo({ type: 'sortTabs', gid: g.id, by: 'domain' }, 'Ordenada por sitio', [g.id])] : null,
     domains.size > 1 && !g.locked ? [I.split, `Dividir por sitio (${domains.size} listas)`, () => withUndo({ type: 'split', gid: g.id }, `Dividida en ${domains.size} listas`, [g.id])] : null,
-    otherDevices().length ? [I.send, 'Enviar a otro equipo', () => sendSheet([g.id])] : null,
+    otherDevices().length ? [I.send, outgoing ? 'Enviar a otro equipo distinto' : 'Enviar a otro equipo', () => sendSheet([g.id])] : null,
     [I.lock, g.locked ? 'Desbloquear' : 'Bloquear (evita borrarla)', () => S.enqueue({ type: 'update', gid: g.id, patch: { locked: !g.locked } })],
-    g.locked ? null : [I.trash, 'Mover a la papelera', () => withUndo({ type: 'trash', gid: g.id }, 'Lista en la papelera', [g.id]), 'danger']
+    g.locked ? null : outgoing
+      ? [I.trash, 'Cancelar el envío (a la papelera)', () => withUndo({ type: 'cancelSend', gid: g.id }, 'Envío cancelado: la lista está en la papelera', [g.id]), 'danger']
+      : [I.trash, 'Mover a la papelera', () => withUndo({ type: 'trash', gid: g.id }, 'Lista en la papelera', [g.id]), 'danger']
   ]);
 }
 
+/**
+ * Envía listas a otro equipo. Como en la extensión, se envía una COPIA y la lista sigue en tus listas
+ * (antes se movía y no había forma de traerla de vuelta). Si ya eran envíos pendientes, solo cambia el destino.
+ */
 function sendSheet(gids) {
+  const d = S.state.data;
+  const retarget = gids.every(id => d.groups[id]?.targetDevice && d.groups[id].targetDevice !== me().id);
   form('Enviar a otro equipo', [{ name: 'dev', label: 'Equipo', type: 'select', value: '', options: otherDevices().map(x => [x.id, x.name]) }], 'Enviar', v => {
-    S.enqueue(gids.length === 1 ? { type: 'update', gid: gids[0], patch: { targetDevice: v.dev } } : { type: 'updateMany', gids, patch: { targetDevice: v.dev } });
-    toast('Le llegará a ' + devName(v.dev) + ' cuando sincronice.');
-  }, 'La extensión de ese equipo lo recibirá en «Recibidas».');
+    if (retarget) {
+      withUndo(gids.length === 1 ? { type: 'update', gid: gids[0], patch: { targetDevice: v.dev } } : { type: 'updateMany', gids, patch: { targetDevice: v.dev } },
+        `Ahora va a ${devName(v.dev)}`, gids);
+    } else {
+      withUndo({ type: 'sendCopies', gids, dev: v.dev, origin: me().id },
+        `${gids.length === 1 ? 'Copia enviada' : plural(gids.length, 'copia enviada', 'copias enviadas')} a ${devName(v.dev)}: le llegará cuando sincronice`);
+    }
+  }, retarget ? 'Cambia el equipo al que va.' : 'Se envía una copia: la lista sigue también en tus listas. La extensión de ese equipo la recibirá en «Recibidas».');
 }
 
 function openAndRemove(g, t, open = true) {
@@ -273,12 +308,25 @@ function moveSheet(refs) {
   });
 }
 
+/**
+ * Quita la puntuación pegada al final de una dirección copiada de un texto («(ver https://x.com/a).»).
+ * Un «)» final solo se quita si sobra: en «…/Mercurio_(planeta)» es parte de la dirección.
+ */
+function trimUrl(u) {
+  const count = (s, c) => s.split(c).length - 1;
+  for (;;) {
+    const t = u.replace(/[\].,;]+$/, '');
+    if (t.endsWith(')') && count(t, '(') < count(t, ')')) u = t.slice(0, -1);
+    else return t;
+  }
+}
+
 function parseLinks(text) {
   const out = [];
   for (const line of String(text || '').split(/\n+/)) {
     // Formato de OneTab «url | título» o un texto con una dirección dentro.
     const m = line.match(/(https?:\/\/[^\s|]+)\s*(?:\|\s*(.*))?/i);
-    if (m) out.push({ url: m[1].replace(/[)\].,;]+$/, ''), title: (m[2] || '').trim() });
+    if (m) out.push({ url: trimUrl(m[1]), title: (m[2] || '').trim() });
   }
   return out;
 }
@@ -532,14 +580,18 @@ async function shotViewer(s) {
       <button class="btn" data-sh="share">${I.share} Compartir</button><button class="btn" data-sh="save">${I.download} Guardar</button>
       <button class="btn danger" data-sh="del">${I.trash} Borrar</button></div>
     ${full ? '' : '<p class="muted small">Solo está la miniatura en Dropbox. La imagen completa sigue en el equipo donde se hizo (o elige «imágenes completas» en Ajustes → Capturas de la extensión).</p>'}
-    <div class="viewer" data-viewer><p class="muted">Cargando…</p></div>`, async el => {
+    <div class="viewer" data-viewer><p class="muted">Cargando…</p></div>`, async (el, alive) => {
     let blobs = [];
     const box = $('[data-viewer]', el);
     try {
       blobs = full ? await Promise.all(s.files.parts.map(id => S.shotImage(id, 'image/png'))) : [await S.shotImage(s.files.thumb, 'image/jpeg')];
+      if (!alive()) return;
       box.innerHTML = '';
-      for (const b of blobs) { const im = new Image(); im.src = URL.createObjectURL(b); im.alt = ''; box.append(im); }
-    } catch (e) { box.innerHTML = `<p class="err">${esc(e instanceof LockedError ? 'Falta la contraseña de cifrado.' : 'No se pudo descargar: ' + (e.message || e))}</p>`; }
+      for (const b of blobs) { const im = new Image(); im.src = sheetUrl(b); im.alt = ''; box.append(im); }
+    } catch (e) {
+      if (!alive()) return;
+      box.innerHTML = `<p class="err">${esc(e instanceof LockedError ? 'Falta la contraseña de cifrado.' : 'No se pudo descargar: ' + (e.message || e))}</p>`;
+    }
     const fileName = (s.title || 'captura').replace(/[\\/:*?"<>|]+/g, ' ').slice(0, 80) + (full ? '.png' : '.jpg');
     el.querySelectorAll('[data-sh]').forEach(b => b.addEventListener('click', async () => {
       if (b.dataset.sh === 'del') {
@@ -657,28 +709,12 @@ function xSheet(e) {
       <span data-xs-link></span>
       <button class="btn danger" data-xs="del">${I.trash} Borrar</button>
     </div>
-    <div class="viewer" data-viewer>${thumb ? `<img alt="" src="${thumb}">` : ''}${['image', 'text', 'video', 'audio'].includes(k) && e.size < 60 * 1024 * 1024 ? '<p class="muted">Cargando…</p>' : ''}</div>`, async el => {
+    <div class="viewer" data-viewer>${thumb ? `<img alt="" src="${thumb}">` : ''}${['image', 'text', 'video', 'audio'].includes(k) && e.size < 60 * 1024 * 1024 ? '<p class="muted">Cargando…</p>' : ''}</div>`, async (el, alive) => {
     const box = $('[data-viewer]', el);
-    let blob = null;
-    const get = async () => blob ??= await xFetch(e);
-    if (['image', 'text', 'video', 'audio'].includes(k) && e.size < 60 * 1024 * 1024) {
-      const b = await get();
-      if (b && sheet.open) {
-        if (k === 'text') {
-          const t = await b.text();
-          XF.X.texts.set(e.id, t);
-          box.innerHTML = `<pre class="xf-pre">${esc(t)}</pre>`;
-          const u = safeHref(lonelyUrl(t));
-          if (u) $('[data-xs-link]', el).outerHTML = `<a class="btn" href="${esc(u)}" target="_blank" rel="noopener noreferrer">${I.open} Abrir enlace</a>`;
-        } else {
-          const media = document.createElement(k === 'image' ? 'img' : k);
-          media.src = URL.createObjectURL(b);
-          if (k !== 'image') { media.controls = true; media.playsInline = true; }
-          media.alt = '';
-          box.replaceChildren(media);
-        }
-      } else if (!b) box.innerHTML = '';
-    }
+    // Una sola descarga aunque se pulse un botón mientras llega la vista previa (si falla, se puede reintentar).
+    let pending = null;
+    const get = () => pending ??= xFetch(e).then(b => { if (!b) pending = null; return b; });
+    // Los botones funcionan desde el principio, también mientras se descarga la vista previa.
     el.querySelectorAll('[data-xs]').forEach(btn => btn.addEventListener('click', async () => {
       const act = btn.dataset.xs;
       if (act === 'del') {
@@ -698,6 +734,25 @@ function xSheet(e) {
         else toast('Este navegador no puede compartir archivos. Usa «Guardar».');
       }
     }));
+    if (['image', 'text', 'video', 'audio'].includes(k) && e.size < 60 * 1024 * 1024) {
+      const b = await get();
+      if (!alive()) return; // se cerró o se abrió otra hoja mientras se descargaba
+      if (b) {
+        if (k === 'text') {
+          const t = await b.text();
+          XF.X.texts.set(e.id, t);
+          box.innerHTML = `<pre class="xf-pre">${esc(t)}</pre>`;
+          const u = safeHref(lonelyUrl(t));
+          if (u) $('[data-xs-link]', el).outerHTML = `<a class="btn" href="${esc(u)}" target="_blank" rel="noopener noreferrer">${I.open} Abrir enlace</a>`;
+        } else {
+          const media = document.createElement(k === 'image' ? 'img' : k);
+          media.src = sheetUrl(b);
+          if (k !== 'image') { media.controls = true; media.playsInline = true; }
+          media.alt = '';
+          box.replaceChildren(media);
+        }
+      } else box.innerHTML = '';
+    }
   });
 }
 
@@ -766,10 +821,11 @@ function viewCopias() {
 }
 
 async function backupSheet(id, label) {
-  openSheet(`<h3>Copia del ${esc(label)}</h3><div data-b><p class="muted">Descargando…</p></div>`, async el => {
+  openSheet(`<h3>Copia del ${esc(label)}</h3><div data-b><p class="muted">Descargando…</p></div>`, async (el, alive) => {
     const box = $('[data-b]', el);
     try {
       const data = await S.readBackup(id);
+      if (!alive()) return;
       const gs = liveGroups(data), cur = liveGroups(S.state.data);
       const tabs = gs.reduce((n, g) => n + g.tabs.length, 0), curTabs = cur.reduce((n, g) => n + g.tabs.length, 0);
       box.innerHTML = `<p>${plural(gs.length, 'lista', 'listas')} y ${plural(tabs, 'pestaña', 'pestañas')} (ahora tienes ${cur.length} y ${curTabs}).</p>
@@ -783,7 +839,7 @@ async function backupSheet(id, label) {
         try { await S.restoreBackup(data); closeSheet(); toast('Copia restaurada'); }
         catch (err) { $('[data-err]', box).textContent = err.message || String(err); e.target.disabled = false; e.target.textContent = 'Restaurar esta copia'; }
       });
-    } catch (e) { box.innerHTML = `<p class="err">${esc(e instanceof LockedError ? 'Esta copia está cifrada con otra contraseña.' : e.message || String(e))}</p>`; }
+    } catch (e) { if (alive()) box.innerHTML = `<p class="err">${esc(e instanceof LockedError ? 'Esta copia está cifrada con otra contraseña.' : e.message || String(e))}</p>`; }
   });
 }
 
@@ -874,6 +930,7 @@ function exportText() {
 /* ───────── Pantallas especiales ───────── */
 
 function renderLogin(error = '') {
+  app.dataset.screen = 'login';
   app.innerHTML = `<div class="hero">
     <img src="icons/icon-192.png" alt="">
     <h1>OneTab Móvil</h1>
@@ -885,6 +942,7 @@ function renderLogin(error = '') {
 }
 
 function renderLocked() {
+  app.dataset.screen = 'locked';
   app.innerHTML = `<div class="hero">
     <img src="icons/icon-192.png" alt="">
     <h1>Datos cifrados</h1>
@@ -912,6 +970,7 @@ async function logout() {
   if (S.pendingCount() && !confirm(`Hay ${plural(S.pendingCount(), 'cambio', 'cambios')} sin subir que se perderán. ¿Cerrar sesión?`)) return;
   await S.wipe();
   XF.reset();
+  thumbUrls.forEach(u => URL.revokeObjectURL(u));
   thumbUrls.clear();
   render();
 }
@@ -933,43 +992,86 @@ function statusPill() {
   return `<button class="pill" data-s="${s}" data-sync title="${esc(st.error || (st.lastSync ? 'Última sincronización ' + relativeTime(st.lastSync) : ''))}"><span class="dot"></span>${esc(text)}</button>`;
 }
 
+const SORTS = [['new', 'Más recientes'], ['old', 'Más antiguas'], ['name', 'Por nombre'], ['size', 'Más pestañas']];
+
+/**
+ * Lo escrito y aún no guardado en los campos de la pantalla, y el campo con el foco, sobreviven a un repintado
+ * completo. Sin esto, cada sincronización en segundo plano (cada minuto o al volver a la app) los vaciaba.
+ * Devuelve la función que los repone después de pintar.
+ */
+function keepFields() {
+  const drafts = [...app.querySelectorAll('textarea[id], input[id]:not([type=checkbox]):not([type=radio])')]
+    .filter(el => el.value !== el.defaultValue).map(el => [el.id, el.value]);
+  const a = document.activeElement;
+  const focus = a && a.id && app.contains(a) ? { id: a.id, s: a.selectionStart, e: a.selectionEnd, top: a.scrollTop } : null;
+  return () => {
+    for (const [id, val] of drafts) { const el = document.getElementById(id); if (el && app.contains(el)) el.value = val; }
+    const el = focus && document.getElementById(focus.id);
+    if (!el || !app.contains(el)) return;
+    el.focus({ preventScroll: true });
+    try { if (focus.s != null) el.setSelectionRange(focus.s, focus.e); } catch { /* campo sin selección (select) */ }
+    el.scrollTop = focus.top;
+  };
+}
+
 function render() {
   if (!dbx.isConnected()) return renderLogin();
-  if (S.state.status === 'locked') return renderLocked();
-  if (!S.state.loaded && S.state.status !== 'error' && S.state.status !== 'offline') {
+  const st = S.state;
+  // La pantalla de la contraseña no se rehace mientras se vuelve a comprobar de fondo: borraría lo escrito.
+  if (st.status === 'locked' || (st.status === 'syncing' && app.dataset.screen === 'locked')) {
+    if (app.dataset.screen !== 'locked') renderLocked();
+    return;
+  }
+  if (!st.loaded && st.status !== 'error' && st.status !== 'offline') {
+    app.dataset.screen = 'boot';
     app.innerHTML = `<p class="boot">Cargando tus listas de Dropbox…</p>`;
     return;
   }
-  const d = S.state.data;
+  const d = st.data;
   const inboxN = liveGroups(d).filter(g => g.targetDevice === me().id).length;
   navigator.setAppBadge?.(inboxN || 0).catch?.(() => {});
   const v = ui.view;
   const selectable = v === 'listas' || v === 'recibidas';
   if (!selectable) ui.sel = null;
-  const filters = v === 'listas' ? `<div class="search"><input class="field" id="q" type="search" placeholder="Buscar título, dirección o #etiqueta" value="${esc(ui.q)}" autocomplete="off"></div>
-    <div class="filters">
+  const sortLabel = (SORTS.find(([id]) => id === prefs.get('sort')) || SORTS[0])[1];
+  const search = v === 'listas' ? `<div class="search"><input class="field" id="q" type="search" placeholder="Buscar título, dirección o #etiqueta" value="${esc(ui.q)}" autocomplete="off">
+      <button class="icon-btn sort-btn ${prefs.get('sort') !== 'new' ? 'on' : ''}" data-sortmenu aria-label="Orden: ${esc(sortLabel)}" title="Orden: ${esc(sortLabel)}">${I.sort}</button></div>` : '';
+  const filters = v === 'listas' ? `<div class="filters">
       <select class="field" id="f-folder" aria-label="Carpeta">${[['all', 'Todas'], ['starred', '★ Destacadas'], ['remind', '⏰ Con recordatorio'], ['none', 'Sin carpeta'], ...sortedFolders(d).map(f => [f.id, f.name])].map(([id, l]) => `<option value="${esc(id)}" ${prefs.get('folder') === id ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
       <select class="field" id="f-device" aria-label="Equipo">${[['all', 'Todos los equipos'], ...Object.values(d.devices).map(x => [x.id, x.name])].map(([id, l]) => `<option value="${esc(id)}" ${prefs.get('device') === id ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
-      <select class="field" id="f-sort" aria-label="Orden">${[['new', 'Más recientes'], ['old', 'Más antiguas'], ['name', 'Por nombre'], ['size', 'Más pestañas']].map(([id, l]) => `<option value="${id}" ${prefs.get('sort') === id ? 'selected' : ''}>${l}</option>`).join('')}</select>
     </div>` : '';
   const views = { listas: viewListas, recibidas: viewRecibidas, sesiones: viewSesiones, capturas: viewCapturas, archivos: viewArchivos, mas: viewMas,
     papelera: viewPapelera, duplicados: viewDuplicados, copias: viewCopias, importar: viewImportar, excluidos: viewExcluidos, ajustes: viewAjustes };
   const body = views[v]();
   const navItem = (id, icon, label, badge = 0) => `<a href="#${id}" ${v === id || (id === 'mas' && SUB.has(v)) ? 'aria-current="page"' : ''}>${icon}<span>${label}</span>${badge ? `<span class="badge">${badge}</span>` : ''}</a>`;
-  const focused = document.activeElement?.id === 'q' ? document.activeElement.selectionStart : null;
-  const y = window.scrollY;
+  const n = selCount();
   const bottom = ui.sel
-    ? `<div class="selbar"><button class="btn" data-sel-cancel>Cancelar</button><span class="selcount">${plural(selCount(), 'seleccionado', 'seleccionados')}</span>
-        <button class="btn" data-sel-all>Todo</button><button class="btn primary" data-sel-menu ${selCount() ? '' : 'disabled'}>Acciones</button></div>`
+    ? `<div class="selbar"><button class="icon-btn sel-cancel" data-sel-cancel aria-label="Cancelar la selección" title="Cancelar la selección">${I.x}</button><span class="selcount"><b>${n}</b><span class="selword"> ${n === 1 ? 'seleccionado' : 'seleccionados'}</span></span>
+        <button class="btn" data-sel-all>Todo</button><button class="btn primary" data-sel-menu ${n ? '' : 'disabled'}>Acciones</button></div>`
     : `<nav class="nav" aria-label="Secciones"><div class="nav-in">
       ${navItem('listas', I.list, 'Listas')}${navItem('recibidas', I.inbox, 'Recibidas', inboxN)}${navItem('sesiones', I.session, 'Sesiones')}${navItem('capturas', I.camera, 'Capturas')}${navItem('archivos', I.files, 'Archivos', XF.freshCount())}${navItem('mas', I.menu, 'Más')}
     </div></nav>`;
-  app.innerHTML = `<header class="top"><div class="top-row">${SUB.has(v) ? `<a class="icon-btn back" href="#mas" aria-label="Volver">${I.undo}</a>` : ''}<h1>${TITLES[v]}</h1>
-      ${selectable && !ui.sel ? `<button class="icon-btn" data-sel-start aria-label="Seleccionar varias">${I.check}</button>` : ''}${statusPill()}</div>${filters}</header>
+  const topRow = `<div class="top-row">${SUB.has(v) ? `<a class="icon-btn back" href="#mas" aria-label="Volver">${I.back}</a>` : ''}<h1>${TITLES[v]}</h1>
+      ${selectable && !ui.sel ? `<button class="icon-btn" data-sel-start aria-label="Seleccionar varias">${I.check}</button>` : ''}${statusPill()}</div>`;
+  const foot = `${selectable && !ui.sel ? `<button class="fab" data-add aria-label="Añadir enlaces">${I.plus}</button>` : ''}${bottom}`;
+  const shape = `${v}|${ui.sel ? 1 : 0}`;
+  const y = window.scrollY;
+  if (document.activeElement?.id === 'q' && app.dataset.screen === 'main' && app.dataset.shape === shape) {
+    // Escribiendo en el buscador: se repinta todo menos el campo. Sustituirlo cortaba la palabra que el teclado
+    // del móvil está componiendo (Gboard) y el texto acababa repetido («rrerelrell…»).
+    $('.top-row', app).outerHTML = topRow;
+    $('.filters', app).outerHTML = filters;
+    $('#main', app).innerHTML = body;
+    $('#foot', app).innerHTML = foot;
+  } else {
+    const restore = keepFields();
+    app.innerHTML = `<header class="top">${topRow}${search}${filters}</header>
     <main class="main" id="main">${body}</main>
-    ${selectable && !ui.sel ? `<button class="fab" data-add aria-label="Añadir enlaces">${I.plus}</button>` : ''}
-    ${bottom}`;
-  if (focused !== null) { const q = $('#q'); q.focus(); q.setSelectionRange(focused, focused); }
+    <div id="foot">${foot}</div>`;
+    app.dataset.screen = 'main';
+    app.dataset.shape = shape;
+    restore();
+  }
   window.scrollTo(0, y);
   if (v === 'capturas') loadThumbs();
 }
@@ -1007,6 +1109,9 @@ app.addEventListener('click', e => {
   if (ds.xfplain) return XF.retry(+ds.xfplain, true);
   if (ds.xfdismiss) return XF.dismiss(+ds.xfdismiss);
   if ('add' in ds) return addForm();
+  if ('sortmenu' in ds) {
+    return menu('Ordenar las listas', '', SORTS.map(([id, l]) => [prefs.get('sort') === id ? I.boxOn : I.box, l, () => { prefs.set('sort', id); render(); window.scrollTo(0, 0); }]));
+  }
   if ('more' in ds) { ui.limit += 60; return render(); }
   if ('selStart' in ds) { ui.sel = { g: new Set(), t: new Set() }; return render(); }
   if ('selCancel' in ds) return endSel();
@@ -1052,9 +1157,13 @@ app.addEventListener('click', e => {
     withUndo({ type: 'import', groups: r.groups, folders: r.folders || [], folderId: $('#imp-folder').value || null }, `${plural(r.groups.length, 'lista importada', 'listas importadas')}`);
     ui.importing = null; location.hash = 'listas'; return;
   }
-  if ('exclSave' in ds) { S.enqueue({ type: 'excluded', list: $('#excl').value.split(/[\n,]+/) }); return toast('Sitios excluidos guardados'); }
+  if ('exclSave' in ds) { const ta = $('#excl'); ta.defaultValue = ta.value; S.enqueue({ type: 'excluded', list: ta.value.split(/[\n,]+/) }); return toast('Sitios excluidos guardados'); }
   if ('logout' in ds) return logout();
-  if ('renameDev' in ds) { S.renameDevice($('#dev-name').value); return toast('Nombre guardado'); }
+  if ('renameDev' in ds) {
+    const f = $('#dev-name');
+    if (!f.value.trim()) { f.value = me().name; return toast('Escribe un nombre para este móvil'); }
+    f.defaultValue = f.value; S.renameDevice(f.value); return toast('Nombre guardado');
+  }
   if ('forget' in ds) { S.forgetKeys(); toast('Contraseña olvidada en este dispositivo'); return render(); }
   if ('fadd' in ds) return form('Nueva carpeta', [{ name: 'name', label: 'Nombre' }], 'Crear', v => S.enqueue({ type: 'addFolder', id: S.newId(), name: v.name }));
   if (ds.frename) { const f = S.state.data.folders[ds.frename]; return f && form('Cambiar nombre', [{ name: 'name', label: 'Nombre', value: f.name }], 'Guardar', v => S.enqueue({ type: 'renameFolder', id: f.id, name: v.name })); }
@@ -1070,14 +1179,14 @@ app.addEventListener('click', e => {
 
 let qTimer = null;
 app.addEventListener('input', e => {
-  if (e.target.id === 'q') { ui.q = e.target.value; ui.limit = 40; clearTimeout(qTimer); qTimer = setTimeout(render, 150); }
+  // Al cambiar la búsqueda se vuelve arriba: si no, el primer resultado podía quedar tapado por la cabecera.
+  if (e.target.id === 'q') { ui.q = e.target.value; ui.limit = 40; clearTimeout(qTimer); qTimer = setTimeout(() => { render(); window.scrollTo(0, 0); }, 150); }
   if (e.target.id === 'imp-text' && ui.importing?.result) ui.importing = { text: e.target.value };
 });
 app.addEventListener('change', async e => {
   const id = e.target.id;
   if (id === 'f-folder') { prefs.set('folder', e.target.value); ui.limit = 40; render(); }
   if (id === 'f-device') { prefs.set('device', e.target.value); ui.limit = 40; render(); }
-  if (id === 'f-sort') { prefs.set('sort', e.target.value); render(); }
   if (id === 'theme') { prefs.set('theme', e.target.value); applyTheme(); }
   if (id === 'swipe') { prefs.set('swipe', e.target.value); toast('Guardado'); }
 });
@@ -1175,10 +1284,14 @@ function liveFiles() {
 window.addEventListener('hashchange', route);
 
 // Repintar al cambiar los datos, sin perder el desplazamiento.
-let raf = 0;
-S.subscribe(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { if (!sheet.open || S.state.status === 'locked') render(); }); });
-XF.subscribe(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { if (!sheet.open) render(); }); });
-sheet.addEventListener('close', () => render());
+// Mientras el teclado está componiendo una palabra (Gboard) no se repinta: se espera a que termine.
+let raf = 0, composing = false, owed = false;
+const softRender = () => { if (composing) { owed = true; return; } render(); };
+app.addEventListener('compositionstart', () => { composing = true; });
+app.addEventListener('compositionend', () => { composing = false; if (owed) { owed = false; requestAnimationFrame(softRender); } });
+S.subscribe(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { if (!sheet.open || S.state.status === 'locked') softRender(); }); });
+XF.subscribe(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { if (!sheet.open) softRender(); }); });
+sheet.addEventListener('close', () => { freeSheetUrls(); softRender(); });
 
 window.addEventListener('online', () => S.scheduleSync(300));
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') S.scheduleSync(200); liveFiles(); });
